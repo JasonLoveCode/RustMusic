@@ -29,6 +29,9 @@ export default function CoverImg({ src, seed, className = "", iconSize = 18 }: C
         // 渲染进程的图片缓存不再随曲库规模线性增长）
         loading="lazy"
         decoding="async"
+        // 不带 Referer：应用来源（tauri.localhost）会被 B 站等图床的
+        // 防盗链拒绝（403），无 Referer 反而放行
+        referrerPolicy="no-referrer"
         onError={() => setErr(true)}
         className={`object-cover bg-[var(--shade)] ${className}`}
       />
