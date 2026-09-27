@@ -23,6 +23,7 @@ import type {
   OnlineRecState,
   OnlineSource,
   PlaylistEntryMeta,
+  BiliTrack,
   DownloadState,
   Folder,
   LyricsPayload,
@@ -112,6 +113,22 @@ interface Store {
   kugouSearched: boolean;
   kugouPage: number;
   kugouCache: Record<string, KgSong>;
+
+  /** B 站曲目元数据缓存（键 = rid "BVxxx-cid"，我喜欢/播放列表/队列条目用） */
+  biliCache: Record<string, BiliTrack>;
+
+  /** B 站登录态（扫码；字幕功能依赖登录） */
+  biliLoggedIn: boolean;
+  biliNickname: string;
+
+  /** 在线音源页“当前结果”（切页保留，换解析目标才替换） */
+  sourcesResult: import("./types").SourcesResult | null;
+  setSourcesResult(
+    r:
+      | import("./types").SourcesResult
+      | null
+      | ((cur: import("./types").SourcesResult | null) => import("./types").SourcesResult | null)
+  ): void;
 
   quality: string;
   /** 关闭主窗口行为：tray = 最小化到托盘（默认）；exit = 直接退出应用 */
@@ -219,6 +236,62 @@ interface Store {
   rescan(): void;
   addSource(url: string, title: string): Promise<void>;
   deleteSource(id: number): Promise<void>;
+  /** 解析 B 站视频加入在线音源（多P全部加入） */
+  addBilibili(input: string): Promise<void>;
+  biliSetLogin(loggedIn: boolean, nickname: string): void;
+  biliLogout(): Promise<void>;
+  /** 播放一条 B 站曲目（空间/单视频结果区）：rid 可为纯 bvid */
+  playBilibili(row: {
+    rid: string;
+    title: string;
+    artist: string;
+    cover: string;
+    durationMs: number;
+  }): void;
+  /** 整个结果列表进队列、从第 idx 首开始播（播完自动下一首） */
+  playBilibiliList(
+    rows: {
+      rid: string;
+      title: string;
+      artist: string;
+      cover: string;
+      durationMs: number;
+    }[],
+    idx: number
+  ): void;
+  /** 按 id 播放直链音源（结果区展示用） */
+  playSourceId(id: number): void;
+  /** UP 主空间：信息 + 投稿第一页 + 合集列表 */
+  biliSpace(
+    input: string,
+    order: string
+  ): Promise<{
+    mid: string;
+    name: string;
+    face: string;
+    fans: string;
+    total: number;
+    hasMore: boolean;
+    items: import("./types").BiliSpaceItem[];
+    collections: { id: number; kind: string; title: string; total: number }[];
+  }>;
+  biliSpaceMore(
+    mid: string,
+    order: string,
+    pn: number
+  ): Promise<{ total: number; hasMore: boolean; items: import("./types").BiliSpaceItem[] }>;
+  biliSpaceCollection(
+    mid: string,
+    id: number,
+    kind: string
+  ): Promise<{ total: number; hasMore: boolean; items: import("./types").BiliSpaceItem[] }>;
+  biliSpaceCollectionMore(
+    mid: string,
+    id: number,
+    kind: string,
+    pn: number
+  ): Promise<{ total: number; hasMore: boolean; items: import("./types").BiliSpaceItem[] }>;
+  biliVideoInfo(input: string): Promise<import("./types").BiliSpaceItem[]>;
   setEq(gains: number[], enabled: boolean): void;
   clearCache(): Promise<void>;
 
@@ -394,7 +467,9 @@ function applyPlayState(p: PlayState, posOverride?: number) {
           ? `qq-${p.qid}`
           : p.kind === "kugou" && p.kgid != null
             ? `kug-${p.kgid}`
-            : null;
+            : p.kind === "bilibili" && p.qid != null
+              ? `bili-${p.qid}`
+              : null;
   if (key) get().loadLyricsByKey(key);
   // 换曲开播：在线曲目更新“最近播放”；本地曲目只在本地更新单条的
   // lastPlayed/playCount（后端 record_play 已在开播时落库）——
@@ -428,7 +503,10 @@ function pullPlayState() {
 /** 队列项显示名（失败提示用；取不到返回占位） */
 function titleOfQueueItem(
   item: { kind: string; id: number | string },
-  caches: Pick<Store, "tracks" | "neteaseCache" | "qqCache" | "kugouCache" | "sources">
+  caches: Pick<
+    Store,
+    "tracks" | "neteaseCache" | "qqCache" | "kugouCache" | "biliCache" | "sources"
+  >
 ): string {
   if (item.kind === "track") {
     return caches.tracks.find((t) => t.id === item.id)?.title ?? `曲目 #${item.id}`;
@@ -441,6 +519,9 @@ function titleOfQueueItem(
   }
   if (item.kind === "kugou") {
     return caches.kugouCache[item.id as string]?.name ?? `酷狗 #${item.id}`;
+  }
+  if (item.kind === "bilibili") {
+    return caches.biliCache[item.id as string]?.title ?? `B站 #${item.id}`;
   }
   return caches.sources.find((s) => s.id === item.id)?.title ?? `音源 #${item.id}`;
 }
@@ -542,6 +623,12 @@ export const useStore = create<Store>((set, get) => ({
   kugouSearched: false,
   kugouPage: 1,
   kugouCache: {},
+
+  biliCache: {},
+  biliLoggedIn: false,
+  biliNickname: "",
+
+  sourcesResult: null,
 
   quality: "high",
   closeAction: "tray",
@@ -720,15 +807,17 @@ export const useStore = create<Store>((set, get) => ({
     );
 
     try {
-      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus] = await Promise.all([
-        api.getSettings(),
-        api.listTracks(),
-        api.listFolders(),
-        api.listPlaylists(),
-        api.listSources(),
-        api.neteaseStatus(),
-        api.qqStatus(),
-      ]);
+      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus, biliStatus] =
+        await Promise.all([
+          api.getSettings(),
+          api.listTracks(),
+          api.listFolders(),
+          api.listPlaylists(),
+          api.listSources(),
+          api.neteaseStatus(),
+          api.qqStatus(),
+          api.biliStatus(),
+        ]);
       set({
         theme: loadTheme(),
         accent: loadAccent(),
@@ -745,6 +834,8 @@ export const useStore = create<Store>((set, get) => ({
         neteaseNickname: neteaseStatus.nickname,
         qqLoggedIn: qqStatus.loggedIn,
         qqNickname: qqStatus.nickname,
+        biliLoggedIn: biliStatus.loggedIn,
+        biliNickname: biliStatus.nickname,
         quality: settings.quality,
         closeAction: settings.closeAction ?? "tray",
         autoUpdate: settings.autoUpdate ?? true,
@@ -960,6 +1051,7 @@ export const useStore = create<Store>((set, get) => ({
     const neteaseCache = { ...get().neteaseCache };
     const qqCache = { ...get().qqCache };
     const kugouCache = { ...get().kugouCache };
+    const biliCache = { ...get().biliCache };
     for (const e of entries) {
       if (e.kind === "local" && e.trackId != null) {
         queue.push({ kind: "track", id: e.trackId });
@@ -999,6 +1091,16 @@ export const useStore = create<Store>((set, get) => ({
           vip: e.vip ?? false,
         };
         queue.push({ kind: "kugou", id: e.onlineId });
+      } else if (e.kind === "bilibili" && e.onlineId) {
+        biliCache[e.onlineId] = {
+          rid: e.onlineId,
+          title: e.title,
+          artist: e.artist,
+          album: e.album,
+          cover: e.cover,
+          durationMs: Math.round(e.duration * 1000),
+        };
+        queue.push({ kind: "bilibili", id: e.onlineId });
       }
     }
     let target = Math.max(0, Math.min(idx, queue.length - 1));
@@ -1011,6 +1113,7 @@ export const useStore = create<Store>((set, get) => ({
       neteaseCache,
       qqCache,
       kugouCache,
+      biliCache,
       queue,
       qIndex: target,
       history: [...s.history.slice(-50), s.qIndex],
@@ -1068,6 +1171,19 @@ export const useStore = create<Store>((set, get) => ({
       };
       set({ kugouCache });
       return { kind: "kugou", id: e.onlineId };
+    }
+    if (e.kind === "bilibili" && e.onlineId) {
+      const biliCache = { ...get().biliCache };
+      biliCache[e.onlineId] = {
+        rid: e.onlineId,
+        title: e.title,
+        artist: e.artist,
+        album: e.album,
+        cover: e.cover,
+        durationMs: Math.round(e.duration * 1000),
+      };
+      set({ biliCache });
+      return { kind: "bilibili", id: e.onlineId };
     }
     return null;
   },
@@ -1182,6 +1298,23 @@ export const useStore = create<Store>((set, get) => ({
           cover: t.cover,
           durationMs: t.durationMs,
           vip: t.vip ?? false,
+        })
+        .then(ok)
+        .catch((e) => fail(String(e)));
+    } else if (item.kind === "bilibili") {
+      const t = get().biliCache[item.id as string];
+      if (!t) {
+        fail("曲目信息缺失，请重试");
+        return;
+      }
+      api
+        .bilibiliPlay({
+          rid: t.rid,
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          cover: t.cover,
+          durationMs: t.durationMs,
         })
         .then(ok)
         .catch((e) => fail(String(e)));
@@ -1543,6 +1676,109 @@ export const useStore = create<Store>((set, get) => ({
     try {
       await api.deleteSource(id);
       await get().refreshSources();
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  /** 解析 B 站视频加入在线音源列表（多P视频每个分P各加一条） */
+  async addBilibili(input: string) {
+    try {
+      const n = await api.bilibiliAdd(input);
+      await get().refreshSources();
+      if (n > 0) {
+        get().toast(
+          n > 1 ? `已解析并添加 ${n} 个分P` : "已添加 B 站视频音频",
+          "success"
+        );
+      } else {
+        get().toast("该视频已在在线音源列表中", "info");
+      }
+    } catch (e) {
+      get().toast(String(e), "error");
+    }
+  },
+
+  biliSetLogin(loggedIn, nickname) {
+    set({ biliLoggedIn: loggedIn, biliNickname: nickname });
+  },
+
+  playBilibili(row) {
+    get().playBilibiliList([row], 0);
+  },
+
+  playBilibiliList(rows, idx) {
+    if (!rows.length) return;
+    const cache = { ...get().biliCache };
+    for (const r of rows) {
+      cache[r.rid] = {
+        rid: r.rid,
+        title: r.title,
+        artist: r.artist,
+        album: "哔哩哔哩",
+        cover: r.cover,
+        durationMs: r.durationMs,
+      };
+    }
+    const queue: QueueItem[] = rows.map((r) => ({ kind: "bilibili", id: r.rid }));
+    const target = Math.max(0, Math.min(idx, queue.length - 1));
+    set((s) => ({
+      biliCache: cache,
+      playingSourceId: null,
+      queue,
+      qIndex: target,
+      history: [...s.history.slice(-50), s.qIndex],
+      failStreak: 0,
+      failToastId: null,
+    }));
+    get().playQueueIndex(target);
+  },
+
+  playSourceId(id) {
+    set((s) => ({
+      playingSourceId: id,
+      queue: [{ kind: "url", id }],
+      qIndex: 0,
+      history: [...s.history.slice(-50), s.qIndex],
+      failStreak: 0,
+      failToastId: null,
+    }));
+    api.playSource(id).catch((e) => get().toast(`播放音源失败：${e}`, "error"));
+  },
+
+  async biliSpace(input, order) {
+    return api.biliSpace(input, order);
+  },
+
+  biliSpaceMore(mid, order, pn) {
+    return api.biliSpaceMore(mid, order, pn);
+  },
+
+  biliSpaceCollection(mid, id, kind) {
+    return api.biliSpaceCollection(mid, id, kind);
+  },
+
+  biliSpaceCollectionMore(mid, id, kind, pn) {
+    return api.biliSpaceCollectionMore(mid, id, kind, pn);
+  },
+
+  biliVideoInfo(input) {
+    return api.biliVideoInfo(input);
+  },
+
+  setSourcesResult(r) {
+    if (typeof r === "function") {
+      set((s) => ({ sourcesResult: r(s.sourcesResult) }));
+    } else {
+      set({ sourcesResult: r });
+    }
+  },
+
+  async biliLogout() {
+    try {
+      await api.biliLogout();
+      set({ biliLoggedIn: false, biliNickname: "" });
+      get().toast("已退出 B 站登录", "success");
     } catch (e) {
       get().toast(String(e), "error");
     }
@@ -2056,7 +2292,9 @@ export const useStore = create<Store>((set, get) => ({
           ? await api.neteaseLyric(Number(id))
           : kind === "qq"
             ? await api.qqLyric(id)
-            : await api.getLyrics(Number(id));
+            : kind === "bili"
+              ? await api.biliLyric(id)
+              : await api.getLyrics(Number(id));
       if (get().lyricsFor === key) {
         set({ lyrics: payload, lyricsLoading: false });
         pushDesktopLyrics(get());

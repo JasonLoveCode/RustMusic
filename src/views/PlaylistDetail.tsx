@@ -64,6 +64,17 @@ type DetailRow =
       cover: string;
       durationMs: number;
       liked: boolean;
+    }
+  | {
+      entry: PlaylistEntryMeta;
+      kind: "bilibili";
+      id: string;
+      name: string;
+      artist: string;
+      album: string;
+      cover: string;
+      durationMs: number;
+      liked: boolean;
     };
 
 export default function PlaylistDetail({ id }: { id: number }) {
@@ -136,6 +147,14 @@ export default function PlaylistDetail({ id }: { id: number }) {
             kind: "kugou",
             id: e.onlineId ?? "",
             liked: !!savedOnline[`kugou-${e.onlineId}`],
+          };
+        }
+        if (e.kind === "bilibili") {
+          return {
+            ...base,
+            kind: "bilibili",
+            id: e.onlineId ?? "",
+            liked: !!savedOnline[`bilibili-${e.onlineId}`],
           };
         }
         return {

@@ -301,8 +301,11 @@ impl Engine {
 
     pub fn play_file(&self, info: TrackInfo) -> Result<(), String> {
         *self.want_url.write() = None;
+        // B 站 DASH 缓存（fragmented MP4）：rodio 的 symphonia 包装层初始化
+        // 会 panic，走 symphonia 直连源；独占模式的会话内 seek/重建不适用，跳过
+        let is_dash = info.kind == "bilibili" || is_fragmented_mp4(&info.path);
         // WASAPI 独占模式（可选）：协商失败自动回退共享模式
-        if self.exclusive_enabled.load(Ordering::Relaxed) {
+        if !is_dash && self.exclusive_enabled.load(Ordering::Relaxed) {
             match self.start_exclusive(&info, 0) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -319,10 +322,16 @@ impl Engine {
         if self.shared_broken.swap(false, Ordering::Relaxed) {
             self.rebuild_shared_output();
         }
-        let file = File::open(&info.path).map_err(|e| format!("打开文件失败: {e}"))?;
-        let src = Decoder::new(BufReader::new(file))
-            .map_err(|e| format!("无法解码该音频文件: {e}"))?
-            .convert_samples::<f32>();
+        let src: Box<dyn rodio::Source<Item = f32> + Send> = if is_dash {
+            Box::new(crate::symdec::SymphoniaSource::open(&info.path)?)
+        } else {
+            let file = File::open(&info.path).map_err(|e| format!("打开文件失败: {e}"))?;
+            Box::new(
+                Decoder::new(BufReader::new(file))
+                    .map_err(|e| format!("无法解码该音频文件: {e}"))?
+                    .convert_samples::<f32>(),
+            )
+        };
         self.start(src, info)
     }
 
@@ -642,7 +651,10 @@ impl Engine {
         let info_opt = self.current.read().clone();
         let is_flac = info_opt
             .as_ref()
-            .map(|i| i.path.to_lowercase().ends_with(".flac"))
+            .map(|i| {
+                // FLAC 与 fragmented MP4（B 站缓存/下载）解码器都不支持就地 seek：走重建
+                i.path.to_lowercase().ends_with(".flac") || is_fragmented_mp4(&i.path)
+            })
             .unwrap_or(false);
         if is_flac {
             let info = info_opt.ok_or("当前没有正在播放的曲目")?;
@@ -666,13 +678,23 @@ impl Engine {
         }
     }
 
-    /// FLAC 专用：重开文件并丢弃到目标时长，重建播放链
+    /// FLAC / B 站 DASH 缓存专用：重开文件并丢弃到目标时长，重建播放链
     fn rebuild_at(&self, info: &TrackInfo, ms: u64) -> Result<(), String> {
-        let file = std::fs::File::open(&info.path).map_err(|e| format!("重开文件失败: {e}"))?;
-        let src = Decoder::new(BufReader::new(file))
-            .map_err(|e| format!("重新解码失败: {e}"))?
-            .convert_samples::<f32>()
-            .skip_duration(Duration::from_millis(ms));
+        // fragmented MP4：按包时间戳跳转（demux 级，不解码）；
+        // rodio 的 skip_duration 对分帧流不生效，不能用它
+        let src: Box<dyn rodio::Source<Item = f32> + Send> =
+            if is_fragmented_mp4(&info.path) {
+                Box::new(crate::symdec::SymphoniaSource::open_at(&info.path, ms)?)
+            } else {
+                let file =
+                    std::fs::File::open(&info.path).map_err(|e| format!("重开文件失败: {e}"))?;
+                Box::new(
+                    Decoder::new(BufReader::new(file))
+                        .map_err(|e| format!("重新解码失败: {e}"))?
+                        .convert_samples::<f32>()
+                        .skip_duration(Duration::from_millis(ms)),
+                )
+            };
         let wrapped = EqSource::with_base(src, self.eq.clone(), self.pos_ms.clone(), ms as f64);
         self.pos_ms.store(ms, Ordering::Relaxed);
         self.dur_ms.store(info.duration_ms, Ordering::Relaxed);
@@ -846,6 +868,7 @@ impl Engine {
                 matches!(
                     e.as_str(),
                     "mp3" | "flac" | "wav" | "ogg" | "oga" | "m4a" | "aac" | "mp4" | "m4b"
+                        | "m4s"
                 )
             })
             .unwrap_or_else(|| "bin".into());
@@ -865,6 +888,8 @@ impl Engine {
             ("netease", Some(nid), _) => format!("net-{nid}-{q}"),
             ("qq", _, Some(qid)) => format!("qq-{qid}-{q}"),
             ("kugou", _, Some(kgid)) => format!("kug-{kgid}-{q}"),
+            // B 站：qid 承载 "bvid-cid"，同一分P同一音质只缓存一份
+            ("bilibili", _, Some(qid)) => format!("bili-{qid}-{q}"),
             // 自定义在线音源没有稳定 ID，仍按 URL 哈希
             _ => {
                 use std::hash::{Hash, Hasher};
@@ -916,10 +941,13 @@ impl Engine {
             }
             dl.insert(key.clone());
         }
+        // B 站 CDN 直链必须带 Referer/UA（部分边缘节点裸请求 403）；
+        // 且 playurl 每次可能返回不同 CDN 主机，不能按主机名判断，按来源标记
+        let is_bili = info.kind == "bilibili";
         let engine = Arc::clone(self);
         let app = self.app.clone();
         std::thread::spawn(move || {
-            let result = download_to(&app, &url, &cache);
+            let result = download_to(&app, &url, &cache, is_bili);
             engine.downloading.write().remove(&key);
             match result {
                 Err(e) => {
@@ -1057,6 +1085,25 @@ fn probe_duration(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// 嗅探 MP4 族文件是否为 fragmented MP4（moov 携带 mvex，B 站 DASH 音频类）：
+/// rodio 的 symphonia 包装层对它初始化会 panic，必须走 symphonia 直连源。
+/// 只读文件头 64KB——fMP4 的 moov 紧跟 ftyp，mvex 必在前部；普通 m4a 没有 mvex。
+fn is_fragmented_mp4(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    if ![".m4s", ".m4a", ".mp4", ".m4b"]
+        .iter()
+        .any(|e| lower.ends_with(e))
+    {
+        return false;
+    }
+    let Ok(mut f) = File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 64 * 1024];
+    let n = f.read(&mut head).unwrap_or(0);
+    head[..n].windows(4).any(|w| w == b"mvex")
+}
+
 /// start() 尾部的公共播放准备（新 Sink 后设置音量/速度并开播）
 fn sink_play_common(sink: &RwLock<Sink>, volume_bits: u32, speed_bits: u32) {
     let s = sink.read();
@@ -1066,17 +1113,26 @@ fn sink_play_common(sink: &RwLock<Sink>, volume_bits: u32, speed_bits: u32) {
 }
 
 /// 下载 URL 到本地缓存文件，通过 download://progress 事件回报进度
-fn download_to(app: &AppHandle, url: &str, dest: &Path) -> Result<(), String> {
+fn download_to(
+    app: &AppHandle,
+    url: &str,
+    dest: &Path,
+    with_bili_headers: bool,
+) -> Result<(), String> {
     let part = dest.with_extension("part");
     // 连接与读取分段超时：整体超时会在大文件（FLAC 等几十 MB）下载中途掐断连接
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30))
         .build();
-    let resp = agent
-        .get(url)
-        .call()
-        .map_err(|e| format!("下载音源失败: {e}"))?;
+    let mut req = agent.get(url);
+    // B 站 CDN 直链必须带 Referer 与浏览器 UA，否则部分边缘节点 403
+    if with_bili_headers {
+        req = req
+            .set("Referer", "https://www.bilibili.com/")
+            .set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36");
+    }
+    let resp = req.call().map_err(|e| format!("下载音源失败: {e}"))?;
     let total: u64 = resp
         .header("content-length")
         .and_then(|v| v.parse().ok())

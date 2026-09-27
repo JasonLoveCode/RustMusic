@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod bilibili;
 mod commands;
 mod db;
 mod engine;
@@ -12,6 +13,7 @@ mod netease;
 mod qq;
 mod qrc;
 mod smtc;
+mod symdec;
 mod updater;
 mod wasapi_out;
 
@@ -511,6 +513,18 @@ fn main() {
             commands::add_source,
             commands::delete_source,
             commands::play_track,
+            commands::bilibili_add,
+            commands::bilibili_play,
+            commands::bilibili_qr_create,
+            commands::bilibili_qr_check,
+            commands::bilibili_status,
+            commands::bilibili_logout,
+            commands::bilibili_lyric,
+            commands::bilibili_space,
+            commands::bilibili_space_more,
+            commands::bilibili_space_collection,
+            commands::bilibili_space_collection_more,
+            commands::bilibili_video_info,
             commands::play_source,
             commands::netease_search,
             commands::netease_play,

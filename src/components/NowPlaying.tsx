@@ -60,7 +60,9 @@ export default function NowPlaying() {
           ? `qq-${current.qid}`
           : current?.kind === "kugou" && current.kgid != null
             ? `kug-${current.kgid}`
-            : null;
+            : current?.kind === "bilibili" && current.qid != null
+              ? `bili-${current.qid}`
+              : null;
 
   useEffect(() => {
     if (lyricsKey) {
@@ -434,6 +436,36 @@ export default function NowPlaying() {
                   />
                 </button>
               )}
+              {current.kind === "bilibili" && current.qid != null && (
+                <button
+                  className="btn-ghost w-8 h-8 !rounded-full glass"
+                  onClick={() =>
+                    toggleLikeOnline({
+                      kind: "bilibili",
+                      id: current.qid!,
+                      name: current.title,
+                      artist: current.artist,
+                      album: current.album,
+                      cover: current.cover,
+                      durationMs: current.durationMs,
+                      mediaMid: "",
+                      vip: false,
+                    })
+                  }
+                  title={
+                    savedOnline[`bilibili-${current.qid}`] ? "取消喜欢" : "收藏到“我喜欢”"
+                  }
+                >
+                  <Heart
+                    size={16}
+                    className={
+                      savedOnline[`bilibili-${current.qid}`]
+                        ? "fill-[#e0533f] text-[#e0533f]"
+                        : ""
+                    }
+                  />
+                </button>
+              )}
               {current.kind === "track" && (
                 <span className="text-[11px] text-[var(--ink-2)] px-2.5 py-0.5 rounded-full bg-[var(--shade)]">
                   {current.album || "未知专辑"}
@@ -447,6 +479,11 @@ export default function NowPlaying() {
               {current.kind === "qq" && current.album && (
                 <span className="text-[11px] text-[var(--ink-2)] px-2.5 py-0.5 rounded-full bg-[var(--shade)]">
                   {current.album}
+                </span>
+              )}
+              {current.kind === "bilibili" && (
+                <span className="text-[11px] text-[#fb7299] px-2.5 py-0.5 rounded-full bg-[rgba(251,114,153,0.14)]">
+                  哔哩哔哩
                 </span>
               )}
             </div>

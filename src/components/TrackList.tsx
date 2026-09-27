@@ -411,7 +411,9 @@ export default function TrackList({
         ? current?.kind === "qq" && current.qid === e.onlineId
         : e.kind === "kugou"
           ? current?.kind === "kugou" && current.kgid === e.onlineId
-          : current?.kind === "netease" && current.nid === Number(e.onlineId);
+          : e.kind === "bilibili"
+            ? current?.kind === "bilibili" && current.qid === e.onlineId
+            : current?.kind === "netease" && current.nid === Number(e.onlineId);
     // 播放失败（无版权/下架）：整行置灰 + 无版权标记（key 与 store unavailable 一致）
     const failKey = `${e.kind}:${e.onlineId}`;
     const dead = unavailable[failKey] != null;
@@ -491,7 +493,13 @@ export default function TrackList({
                 {e.title}
               </span>
               <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--shade-strong)] text-[var(--ink-3)] font-medium shrink-0">
-                {e.kind === "netease" ? "网易云" : e.kind === "kugou" ? "酷狗" : "QQ音乐"}
+                {e.kind === "netease"
+                  ? "网易云"
+                  : e.kind === "kugou"
+                    ? "酷狗"
+                    : e.kind === "bilibili"
+                      ? "B站"
+                      : "QQ音乐"}
               </span>
               {e.vip && !dead && (
                 <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--accent-weak)] text-[var(--accent-strong)] font-bold shrink-0">
@@ -663,7 +671,7 @@ export default function TrackList({
               downloadOnline({
                 kind: onlineMenu.entry.kind,
                 id:
-                  onlineMenu.entry.kind === "qq"
+                  onlineMenu.entry.kind === "qq" || onlineMenu.entry.kind === "bilibili"
                     ? (onlineMenu.entry.onlineId ?? "")
                     : Number(onlineMenu.entry.onlineId),
                 name: onlineMenu.entry.title,
@@ -684,7 +692,7 @@ export default function TrackList({
               toggleLikeOnline({
                 kind: onlineMenu.entry.kind,
                 id:
-                  onlineMenu.entry.kind === "qq"
+                  onlineMenu.entry.kind === "qq" || onlineMenu.entry.kind === "bilibili"
                     ? (onlineMenu.entry.onlineId ?? "")
                     : Number(onlineMenu.entry.onlineId),
                 name: onlineMenu.entry.title,

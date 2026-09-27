@@ -49,6 +49,16 @@ function queueLabel(item: QueueItem): { title: string; artist: string; cover?: s
       };
     return { title: `酷狗 #${item.id}`, artist: "在线曲库" };
   }
+  if (item.kind === "bilibili") {
+    const t = s.biliCache[item.id as string];
+    if (t)
+      return {
+        title: t.title,
+        artist: t.artist || "哔哩哔哩",
+        cover: t.cover || undefined,
+      };
+    return { title: `B站 #${item.id}`, artist: "哔哩哔哩" };
+  }
   const src = s.sources.find((x) => x.id === item.id);
   return {
     title: src?.title || src?.url.split("/").pop() || "在线音源",

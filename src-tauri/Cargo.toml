@@ -1,6 +1,6 @@
 [package]
 name = "rustmusic"
-version = "0.1.8"
+version = "0.1.9"
 description = "RustMusic - 精美的高性能音乐播放器"
 authors = ["RustMusic"]
 license = "Apache-2.0"
@@ -22,6 +22,7 @@ rayon = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 ureq = { version = "2", features = ["json"] }
 percent-encoding = "2"
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4"] }
 souvlaki = "0.8"
 parking_lot = "0.12"
 base64 = "0.22"
@@ -42,6 +43,8 @@ filetime = "0.2"
 # WebView2 TrySuspend：托盘隐藏时挂起渲染进程回收内存
 webview2-com = "0.38"
 windows = "0.61"
+
+[dev-dependencies]
 
 [profile.release]
 lto = true

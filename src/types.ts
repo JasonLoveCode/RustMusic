@@ -33,7 +33,7 @@ export interface Folder {
 
 export interface PlaylistEntryMeta {
   rowid: number;
-  kind: "local" | "netease" | "qq" | "kugou";
+  kind: "local" | "netease" | "qq" | "kugou" | "bilibili";
   trackId: number | null;
   onlineId: string | null;
   title: string;
@@ -93,7 +93,7 @@ export interface LyricsPayload {
 
 export interface TrackInfo {
   id: number | null;
-  kind: "track" | "url" | "netease" | "qq" | "kugou";
+  kind: "track" | "url" | "netease" | "qq" | "kugou" | "bilibili";
   path: string;
   title: string;
   artist: string;
@@ -127,6 +127,59 @@ export interface KgSong {
   cover: string;
   vip: boolean;
 }
+
+/** B 站视频音频条目（rid = "BVxxx-cid"，与后端 qid/缓存键一致） */
+export interface BiliTrack {
+  rid: string;
+  title: string;
+  artist: string;
+  album: string;
+  cover: string;
+  durationMs: number;
+}
+
+/** 空间/单视频解析结果条目（rid 可为纯 bvid，播放时按需解析 cid） */
+export interface BiliSpaceItem {
+  rid: string;
+  title: string;
+  artist: string;
+  cover: string;
+  durationMs: number;
+  play: number;
+  created: number;
+}
+
+export interface BiliCollection {
+  id: number;
+  kind: string;
+  title: string;
+  total: number;
+}
+
+/** 在线音源页“当前结果”（存 store：切页返回不丢） */
+export type SourcesResult =
+  | { type: "video"; rows: BiliSpaceItem[] }
+  | {
+      type: "space";
+      mid: string;
+      name: string;
+      face: string;
+      fans: string;
+      total: number;
+      order: "pubdate" | "click" | "stow";
+      rows: BiliSpaceItem[];
+      pn: number;
+      hasMore: boolean;
+      loadingMore: boolean;
+      collections: BiliCollection[];
+      activeCollection: (BiliCollection & {
+        rows: BiliSpaceItem[];
+        pn: number;
+        hasMore: boolean;
+        loadingMore: boolean;
+      }) | null;
+    }
+  | { type: "direct"; rows: (BiliSpaceItem & { sourceId: number })[] };
 
 export interface NeteaseTrack {
   id: number;
@@ -192,11 +245,12 @@ export interface CurrentTrack extends TrackInfo {
 
 export type RepeatMode = "off" | "all" | "one";
 
-export type QueueItemKind = "track" | "url" | "netease" | "qq" | "kugou";
+export type QueueItemKind = "track" | "url" | "netease" | "qq" | "kugou" | "bilibili";
 
 export type QueueItem =
   | { kind: "track" | "netease" | "url"; id: number }
-  | { kind: "qq" | "kugou"; id: string };
+  | { kind: "qq" | "kugou"; id: string }
+  | { kind: "bilibili"; id: string };
 
 export type ViewName =
   | "library"

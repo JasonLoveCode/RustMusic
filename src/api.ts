@@ -13,6 +13,7 @@ import type {
   SettingsPayload,
   SourceItem,
   TrackMeta,
+  BiliSpaceItem,
 } from "./types";
 
 export const api = {
@@ -47,6 +48,54 @@ export const api = {
   addSource: (url: string, title?: string) =>
     invoke<number>("add_source", { url, title: title ?? "" }),
   deleteSource: (id: number) => invoke<void>("delete_source", { id }),
+  /** 解析 B 站视频（链接/BV号/av号/短链），多P每个分P各加一条，返回新增条数 */
+  bilibiliAdd: (input: string) => invoke<number>("bilibili_add", { input }),
+  /** 播放 B 站曲目（我喜欢/播放列表/最近播放入口；rid = "BVxxx-cid"） */
+  bilibiliPlay: (track: {
+    rid: string;
+    title: string;
+    artist: string;
+    album: string;
+    cover: string;
+    durationMs: number;
+  }) => invoke<void>("bilibili_play", { track }),
+  biliQrCreate: () => invoke<{ key: string; qr: string }>("bilibili_qr_create"),
+  biliQrCheck: (key: string) =>
+    invoke<{ status: string; nickname?: string }>("bilibili_qr_check", { key }),
+  biliStatus: () => invoke<{ loggedIn: boolean; nickname: string }>("bilibili_status"),
+  biliLogout: () => invoke<void>("bilibili_logout"),
+  /** B 站字幕歌词（rid = "BVxxx-cid"；需 B 站登录，无字幕返回空行列表） */
+  biliLyric: (rid: string) => invoke<LyricsPayload>("bilibili_lyric", { rid }),
+  /** UP 主空间：信息 + 投稿列表第一页 + 合集（order: pubdate|click|stow） */
+  biliSpace: (input: string, order: string) =>
+    invoke<{
+      mid: string;
+      name: string;
+      face: string;
+      fans: string;
+      total: number;
+      hasMore: boolean;
+      items: BiliSpaceItem[];
+      collections: { id: number; kind: string; title: string; total: number }[];
+    }>("bilibili_space", { input, order }),
+  biliSpaceMore: (mid: string, order: string, pn: number) =>
+    invoke<{ total: number; hasMore: boolean; items: BiliSpaceItem[] }>(
+      "bilibili_space_more",
+      { mid, order, pn }
+    ),
+  biliSpaceCollection: (mid: string, id: number, kind: string) =>
+    invoke<{ total: number; hasMore: boolean; items: BiliSpaceItem[] }>(
+      "bilibili_space_collection",
+      { mid, id, kind }
+    ),
+  biliSpaceCollectionMore: (mid: string, id: number, kind: string, pn: number) =>
+    invoke<{ total: number; hasMore: boolean; items: BiliSpaceItem[] }>(
+      "bilibili_space_collection_more",
+      { mid, id, kind, pn }
+    ),
+  /** 解析单个视频（当前结果展示，不落库），每分P一条 */
+  biliVideoInfo: (input: string) =>
+    invoke<BiliSpaceItem[]>("bilibili_video_info", { input }),
   neteaseSearch: (keyword: string, offset: number) =>
     invoke<{ total: number; songs: NeteaseTrack[] }>("netease_search", {
       keyword,
