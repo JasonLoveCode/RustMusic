@@ -84,10 +84,22 @@ fn pick_setup_asset(assets: &[serde_json::Value]) -> Option<(String, String, u64
     fallback
 }
 
+/// GitHub 访问走系统代理（环境变量）：无代理网络下直连 GitHub 会被重置/极慢，
+/// 而浏览器等遵循系统代理的应用速度正常。ureq 不读系统/环境代理，需显式传入；
+/// 未设置代理或代理无效时回退直连。
+fn github_agent() -> ureq::Agent {
+    let mut builder = ureq::AgentBuilder::new();
+    if let Some(p) = crate::qq::system_proxy() {
+        builder = builder.proxy(p);
+    }
+    builder.build()
+}
+
 /// 查询 GitHub 最新 release；有更新返回安装包信息，已是最新返回 None
 pub fn fetch_latest(current_version: &str) -> Result<Option<UpdateInfo>, String> {
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
-    let resp = ureq::get(&url)
+    let resp = github_agent()
+        .get(&url)
         .set("User-Agent", UA)
         .set("Accept", "application/vnd.github+json")
         .timeout(Duration::from_secs(12))
@@ -149,7 +161,8 @@ pub fn download(
     }
     let path = std::env::temp_dir().join(&safe_name);
 
-    let resp = ureq::get(url)
+    let resp = github_agent()
+        .get(url)
         .set("User-Agent", UA)
         .timeout(DOWNLOAD_TIMEOUT)
         .call()
