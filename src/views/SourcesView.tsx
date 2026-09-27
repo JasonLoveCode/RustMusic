@@ -345,17 +345,34 @@ export default function SourcesView() {
     useStore.getState().toast(`开始下载 ${selRows.length} 首…`, "info");
   };
 
-  /** 渲染一行结果 */
+  /** 渲染一张结果卡片（16:9 封面网格） */
   const renderRow = (r: BiliSpaceItem, extra?: { sourceId?: number }) => {
     const active = !selMode && rowActive(r);
     const checked = selMode && selKeys.has(r.rid);
+    const removeRow = () => {
+      setResult((cur) => {
+        if (!cur) return cur;
+        if (cur.type === "video")
+          return { ...cur, rows: cur.rows.filter((x) => x.rid !== r.rid) };
+        if (cur.type === "space") {
+          if (cur.activeCollection)
+            return {
+              ...cur,
+              activeCollection: {
+                ...cur.activeCollection,
+                rows: cur.activeCollection.rows.filter((x) => x.rid !== r.rid),
+              },
+            };
+          return { ...cur, rows: cur.rows.filter((x) => x.rid !== r.rid) };
+        }
+        return { ...cur, rows: cur.rows.filter((x) => x.rid !== r.rid) };
+      });
+    };
     return (
       <div
         key={r.rid}
-        className={`group flex items-center gap-3 h-[62px] px-3.5 rounded-xl border transition-colors ${
-          checked
-            ? "bg-[var(--accent-weak)] border-[var(--accent)]"
-            : "bg-white/[0.03] border-white/[0.05] hover:bg-[var(--shade)]"
+        className={`group cursor-pointer rounded-xl p-1.5 transition-colors ${
+          checked ? "bg-[var(--accent-weak)]" : "hover:bg-[var(--shade)]"
         }`}
         onContextMenu={(e) => {
           if (selMode) return;
@@ -366,89 +383,104 @@ export default function SourcesView() {
           if (selMode) toggleSel(r.rid);
         }}
       >
-        {selMode ? (
-          <span
-            className={`w-[18px] h-[18px] rounded-[5px] border flex items-center justify-center shrink-0 transition-colors ${
-              checked
-                ? "bg-[var(--accent)] border-[var(--accent)] text-[var(--accent-on)]"
-                : "border-[var(--line)]"
-            }`}
-          >
-            {checked && <Check size={13} strokeWidth={3} />}
-          </span>
-        ) : (
-          <button
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-transform hover:scale-105"
-            style={{ background: "linear-gradient(135deg, #fb7299, #d95d8a)" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (extra?.sourceId != null) playSourceId(extra.sourceId);
-              else {
-                const idx = visibleRows.findIndex((x) => x.rid === r.rid);
-                playBilibiliList(visibleRows, idx >= 0 ? idx : 0);
-              }
-            }}
-          >
-            <Play size={14} className="fill-current text-[var(--ink)] ml-px" />
-          </button>
-        )}
-        <CoverImg
-          src={r.cover}
-          seed={r.title}
-          className="w-11 h-11 rounded-lg shrink-0"
-          iconSize={14}
-        />
-        <div className="min-w-0 flex-1">
-          <div
-            className={`text-[13px] truncate ${
-              active ? "text-[#fb7299] font-semibold" : "text-[var(--ink)]"
-            }`}
-          >
-            {r.title || "B站视频"}
-          </div>
-          <div className="text-[11.5px] text-[var(--ink-2)] truncate flex items-center gap-2.5">
-            <span>{r.artist || "哔哩哔哩"}</span>
-            {r.durationMs > 0 && <span>{fmtTime(r.durationMs)}</span>}
-            {r.play > 0 && <span>{fmtPlay(r.play)}次播放</span>}
-            {r.created > 0 && (
-              <span className="flex items-center gap-1">
-                <Calendar size={10} />
-                {fmtDate(r.created)}
-              </span>
-            )}
-          </div>
-        </div>
-        {rowLiked(r) && (
-          <Heart size={12} className="fill-[#e0533f] text-[#e0533f] shrink-0" />
-        )}
-        {!selMode && (
-          <button
-            className="btn-ghost w-7 h-7 shrink-0 opacity-0 group-hover:opacity-100 hover:!text-rose-400"
-            title="从结果中移除"
-            onClick={(e) => {
-              e.stopPropagation();
-              setResult((cur) => {
-                if (!cur) return cur;
-                if (cur.type === "video")
-                  return { ...cur, rows: cur.rows.filter((x) => x.rid !== r.rid) };
-                if (cur.type === "space") {
-                  if (cur.activeCollection)
-                    return {
-                      ...cur,
-                      activeCollection: {
-                        ...cur.activeCollection,
-                        rows: cur.activeCollection.rows.filter((x) => x.rid !== r.rid),
-                      },
-                    };
-                  return { ...cur, rows: cur.rows.filter((x) => x.rid !== r.rid) };
+        {/* 16:9 封面 */}
+        <div className="relative aspect-video rounded-lg overflow-hidden bg-[var(--shade)]">
+          <CoverImg
+            src={r.cover}
+            seed={r.title}
+            className="absolute inset-0 w-full h-full"
+            iconSize={26}
+          />
+          {/* 时长角标 */}
+          {r.durationMs > 0 && (
+            <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded bg-black/70 text-white text-[10.5px] tabular-nums">
+              {fmtTime(r.durationMs)}
+            </span>
+          )}
+          {/* 播放按钮浮层 */}
+          {!selMode && (
+            <button
+              className="absolute inset-0 m-auto w-10 h-10 rounded-full bg-black/55 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              title="播放（整个列表连播）"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (extra?.sourceId != null) playSourceId(extra.sourceId);
+                else {
+                  const idx = visibleRows.findIndex((x) => x.rid === r.rid);
+                  playBilibiliList(visibleRows, idx >= 0 ? idx : 0);
                 }
-                return { ...cur, rows: cur.rows.filter((x) => x.rid !== r.rid) };
-              });
-            }}
-          >
-            <Trash2 size={13} />
-          </button>
-        )}
+              }}
+            >
+              <Play size={16} className="fill-current text-white ml-0.5" />
+            </button>
+          )}
+          {/* 多选勾选框 */}
+          {selMode && (
+            <span
+              className={`absolute top-1.5 left-1.5 w-[18px] h-[18px] rounded-[5px] border flex items-center justify-center transition-colors ${
+                checked
+                  ? "bg-[var(--accent)] border-[var(--accent)] text-[var(--accent-on)]"
+                  : "border-white/70 bg-black/30"
+              }`}
+            >
+              {checked && <Check size={13} strokeWidth={3} />}
+            </span>
+          )}
+          {/* 已收藏标记 */}
+          {rowLiked(r) && !selMode && (
+            <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/45 flex items-center justify-center">
+              <Heart size={10} className="fill-[#e0533f] text-[#e0533f]" />
+            </span>
+          )}
+          {/* 移除 */}
+          {!selMode && (
+            <button
+              className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-black/45 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/70"
+              title="从结果中移除"
+              onClick={(e) => {
+                e.stopPropagation();
+                removeRow();
+              }}
+            >
+              <X size={11} className="text-white" />
+            </button>
+          )}
+          {/* 正在播放标记 */}
+          {active && (
+            <span className="absolute left-1.5 bottom-1 px-1.5 py-0.5 rounded bg-[#fb7299] text-white text-[10px] font-semibold">
+              播放中
+            </span>
+          )}
+        </div>
+        {/* 标题 + 元信息 */}
+        <div
+          className={`text-[12.5px] leading-snug mt-1.5 ${
+            active ? "text-[#fb7299] font-semibold" : "text-[var(--ink)]"
+          }`}
+          style={{
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {r.title || "B站视频"}
+        </div>
+        <div className="text-[11px] text-[var(--ink-3)] truncate mt-0.5 flex items-center gap-1.5">
+          <span className="truncate">{r.artist || "哔哩哔哩"}</span>
+          {r.play > 0 && (
+            <>
+              <span>·</span>
+              <span className="shrink-0">{fmtPlay(r.play)}</span>
+            </>
+          )}
+          {r.created > 0 && (
+            <>
+              <span>·</span>
+              <span className="shrink-0">{fmtDate(r.created)}</span>
+            </>
+          )}
+        </div>
       </div>
     );
   };
@@ -622,8 +654,8 @@ export default function SourcesView() {
                   <CoverImg
                     src={space.face}
                     seed={space.name}
-                    className="w-12 h-12 rounded-full shrink-0"
-                    iconSize={16}
+                    className="w-14 h-14 rounded-full shrink-0"
+                    iconSize={18}
                   />
                   <div className="min-w-0 flex-1">
                     <div className="text-[14.5px] font-bold text-[var(--ink)] truncate flex items-center gap-2">
@@ -732,13 +764,15 @@ export default function SourcesView() {
               </div>
             )}
 
-            {result.type === "video" && result.rows.map((r) => renderRow(r))}
-            {result.type === "direct" &&
-              result.rows.map((r) => renderRow(r, { sourceId: r.sourceId }))}
-            {space &&
-              (space.activeCollection ? space.activeCollection.rows : space.rows).map(
-                (r) => renderRow(r)
-              )}
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-x-3 gap-y-4">
+              {result.type === "video" && result.rows.map((r) => renderRow(r))}
+              {result.type === "direct" &&
+                result.rows.map((r) => renderRow(r, { sourceId: r.sourceId }))}
+              {space &&
+                (space.activeCollection ? space.activeCollection.rows : space.rows).map(
+                  (r) => renderRow(r)
+                )}
+            </div>
 
             {space &&
               (space.activeCollection ? space.activeCollection.hasMore : space.hasMore) && (
