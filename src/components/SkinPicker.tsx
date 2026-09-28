@@ -1,14 +1,18 @@
 import { useState } from "react";
-import { Check, ImagePlus, RefreshCw } from "lucide-react";
+import { Check, ImagePlus, RefreshCw, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Modal from "./Modal";
 import { useStore } from "../store";
 import {
+  activeCustomImage,
   applySkin,
   CUSTOM_SKIN,
   DEFAULT_SKIN,
+  loadCustomImages,
   loadCustomSkinSettings,
+  saveCustomImages,
   saveCustomSkinSettings,
+  setActiveCustomImage,
   SKINS,
   skinUri,
   type CustomFill,
@@ -26,6 +30,7 @@ export default function SkinPicker({
   const skin = useStore((s) => s.skin);
   const setSkin = useStore((s) => s.setSkin);
   const [custom, setCustom] = useState<CustomSkinSettings>(loadCustomSkinSettings);
+  const [customImgs, setCustomImgs] = useState<string[]>(loadCustomImages);
 
   const update = (next: CustomSkinSettings) => {
     setCustom(next);
@@ -38,20 +43,33 @@ export default function SkinPicker({
     try {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const sel = await open({
-        multiple: false,
-        title: "选择皮肤图片",
+        multiple: true,
+        title: "添加皮肤图片",
         filters: [
           { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] },
         ],
       });
-      if (typeof sel !== "string") return;
-      const next = { ...custom, img: sel };
-      setCustom(next);
-      saveCustomSkinSettings(next);
+      const paths = typeof sel === "string" ? [sel] : (sel ?? []);
+      if (!paths.length) return;
+      const list = [...customImgs, ...paths.filter((p) => !customImgs.includes(p))];
+      setCustomImgs(list);
+      saveCustomImages(list);
+      setActiveCustomImage(paths[paths.length - 1]);
       setSkin(CUSTOM_SKIN);
-      useStore.getState().toast("自定义皮肤已应用", "success");
+      useStore.getState().toast(`已添加 ${paths.length} 张皮肤图片`, "success");
     } catch (e) {
       useStore.getState().toast(String(e), "error");
+    }
+  };
+
+  const removeImage = (path: string) => {
+    const list = customImgs.filter((p) => p !== path);
+    setCustomImgs(list);
+    saveCustomImages(list);
+    if (activeCustomImage() === path) {
+      // 删除的是当前启用的图片：切回默认皮肤
+      setActiveCustomImage("");
+      setSkin(DEFAULT_SKIN);
     }
   };
 
@@ -101,39 +119,64 @@ export default function SkinPicker({
             backgroundPosition: "center",
           })
         )}
-        {/* 自定义图片卡片 */}
+        {/* 自定义图片图库（多张，hover 出删除） */}
+        {customImgs.map((img) => {
+          const active = skin === CUSTOM_SKIN && activeCustomImage() === img;
+          return (
+            <div
+              key={img}
+              onClick={() => {
+                setActiveCustomImage(img);
+                setSkin(CUSTOM_SKIN);
+              }}
+              className={`group relative aspect-video rounded-xl overflow-hidden cursor-pointer transition-all duration-200 hover:scale-[1.03] hover:shadow-lg ${
+                active ? "" : "opacity-80"
+              }`}
+              style={{
+                backgroundImage: `url("${convertFileSrc(img)}")`,
+                backgroundSize: "var(--skin-fill, cover)",
+                backgroundPosition: "center",
+              }}
+              title="使用这张图片"
+            >
+              {active && (
+                <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-[var(--accent)] text-[var(--accent-on)] flex items-center justify-center shadow">
+                  <Check size={12} strokeWidth={3} />
+                </span>
+              )}
+              <span
+                className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-black/55 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500/80"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeImage(img);
+                }}
+                title="删除"
+              >
+                <X size={11} strokeWidth={3} />
+              </span>
+              <div className="absolute inset-x-0 bottom-0 px-2.5 pb-1.5 pt-6 bg-gradient-to-t from-black/60 to-transparent">
+                <div className="text-[12.5px] text-white font-semibold leading-tight drop-shadow">
+                  自定义图片
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {/* 添加图片 */}
         <button
-          onClick={() => (custom.img ? setSkin(CUSTOM_SKIN) : pickImage())}
-          className={`relative aspect-video rounded-xl overflow-hidden text-left transition-all duration-200 hover:scale-[1.03] hover:shadow-lg ${
-            skin === CUSTOM_SKIN ? "" : "opacity-80"
-          }`}
-          style={
-            custom.img
-              ? { backgroundImage: `url("${convertFileSrc(custom.img)}")`, backgroundSize: "cover", backgroundPosition: "center" }
-              : { background: "var(--shade)" }
-          }
-          title="自定义图片"
+          onClick={pickImage}
+          className="relative aspect-video rounded-xl overflow-hidden transition-all duration-200 hover:scale-[1.03]"
+          style={{ background: "var(--shade)" }}
+          title="添加图片"
         >
-          {!custom.img && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-[var(--ink-3)]">
-              <ImagePlus size={20} />
-              <span className="text-[11.5px]">选择图片</span>
-            </div>
-          )}
-          {skin === CUSTOM_SKIN && (
-            <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-[var(--accent)] text-[var(--accent-on)] flex items-center justify-center shadow">
-              <Check size={12} strokeWidth={3} />
-            </span>
-          )}
-          <div className="absolute inset-x-0 bottom-0 px-2.5 pb-1.5 pt-6 bg-gradient-to-t from-black/60 to-transparent">
-            <div className="text-[12.5px] text-white font-semibold leading-tight drop-shadow">
-              自定义图片
-            </div>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-[var(--ink-3)]">
+            <ImagePlus size={20} />
+            <span className="text-[11.5px]">添加图片</span>
           </div>
         </button>
       </div>
       {/* 自定义皮肤设置区 */}
-      {skin === CUSTOM_SKIN && custom.img && (
+      {skin === CUSTOM_SKIN && activeCustomImage() && (
         <div className="mt-3 p-4 rounded-xl bg-[var(--shade)] flex flex-col gap-3.5">
           <div className="flex items-center gap-3">
             <span className="text-[12.5px] text-[var(--ink-2)] w-[64px] shrink-0">填充方式</span>

@@ -525,7 +525,7 @@ const URI_CACHE = new Map<string, string>();
 /** 皮肤背景的 data URI；默认皮肤返回 null（走内置渐变氛围） */
 export function skinUri(key: string): string | null {
   if (key === CUSTOM_SKIN) {
-    const img = localStorage.getItem(CUSTOM_IMG_KEY);
+    const img = activeCustomImage();
     if (!img) return null;
     return `url("${convertFileSrc(img)}")`;
   }
@@ -586,6 +586,7 @@ const CUSTOM_IMG_KEY = "rustmusic_custom_skin_img";
 const CUSTOM_FILL_KEY = "rustmusic_custom_skin_fill";
 const CUSTOM_SCRIM_KEY = "rustmusic_custom_skin_scrim";
 const CUSTOM_TEXT_KEY = "rustmusic_custom_skin_text";
+const CUSTOM_LIST_KEY = "rustmusic_custom_skins";
 
 export type CustomFill = "cover" | "contain" | "stretch" | "tile";
 
@@ -672,4 +673,34 @@ export async function applyCustomAutoText() {
   } catch {
     document.documentElement.dataset.customText = "light";
   }
+}
+
+/** 用户添加的自定义图片列表（可多张，删除不受限） */
+export function loadCustomImages(): string[] {
+  const raw = localStorage.getItem(CUSTOM_LIST_KEY);
+  if (raw) {
+    try {
+      const v = JSON.parse(raw);
+      if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
+    } catch {
+      /* 损坏则回落迁移 */
+    }
+  }
+  // 旧版单图迁移
+  const legacy = localStorage.getItem(CUSTOM_IMG_KEY);
+  return legacy ? [legacy] : [];
+}
+
+export function saveCustomImages(list: string[]) {
+  localStorage.setItem(CUSTOM_LIST_KEY, JSON.stringify(list));
+}
+
+/** 当前激活的自定义图片路径（空 = 未选） */
+export function activeCustomImage(): string {
+  return localStorage.getItem(CUSTOM_IMG_KEY) ?? "";
+}
+
+export function setActiveCustomImage(path: string) {
+  if (path) localStorage.setItem(CUSTOM_IMG_KEY, path);
+  else localStorage.removeItem(CUSTOM_IMG_KEY);
 }
