@@ -548,6 +548,10 @@ export function applySkin(key: string) {
       // 自定义图片：填充方式/纱强度/文字色系全部来自用户设置
       applyCustomSkinVars();
     } else {
+      // 切回内置皮肤：清掉自定义皮肤的填充/文字色系残留
+      root.removeProperty("--skin-fill");
+      root.removeProperty("--skin-repeat");
+      delete document.documentElement.dataset.customText;
       // 每套皮肤各自的双主题纱：CSS 按 html[data-theme] 取用对应的一份
       const skin = SKINS.find((s) => s.key === key);
       if (skin) {
@@ -559,6 +563,9 @@ export function applySkin(key: string) {
     root.removeProperty("--skin-url");
     root.removeProperty("--skin-scrim-dark");
     root.removeProperty("--skin-scrim-light");
+    root.removeProperty("--skin-fill");
+    root.removeProperty("--skin-repeat");
+    delete document.documentElement.dataset.customText;
   }
   // data-skin 标记：CSS 据此切换玻璃/播放条的透明度档位——皮肤启用时
   // 内容大卡片与播放条更透、磨砂更轻，壁纸左右透出一致（默认皮肤不变）

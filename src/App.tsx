@@ -67,7 +67,9 @@ function DynamicBackdrop() {
           <div
             className="absolute inset-0 transition-all duration-500"
             style={{
-              backgroundImage: skinUrl,
+              // 直接引用 CSS 变量：自定义皮肤在两张图之间切换时
+              // 皮肤名不变、组件不重渲染，var() 让切换即时生效
+              backgroundImage: "var(--skin-url)",
               backgroundSize: "var(--skin-fill, cover)",
               backgroundPosition: "center",
               backgroundRepeat: "var(--skin-repeat, no-repeat)",

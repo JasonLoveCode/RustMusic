@@ -31,6 +31,7 @@ export default function SkinPicker({
   const setSkin = useStore((s) => s.setSkin);
   const [custom, setCustom] = useState<CustomSkinSettings>(loadCustomSkinSettings);
   const [customImgs, setCustomImgs] = useState<string[]>(loadCustomImages);
+  const [activeImg, setActiveImg] = useState<string>(activeCustomImage);
 
   const update = (next: CustomSkinSettings) => {
     setCustom(next);
@@ -55,6 +56,7 @@ export default function SkinPicker({
       setCustomImgs(list);
       saveCustomImages(list);
       setActiveCustomImage(paths[paths.length - 1]);
+      setActiveImg(paths[paths.length - 1]);
       setSkin(CUSTOM_SKIN);
       useStore.getState().toast(`已添加 ${paths.length} 张皮肤图片`, "success");
     } catch (e) {
@@ -66,9 +68,10 @@ export default function SkinPicker({
     const list = customImgs.filter((p) => p !== path);
     setCustomImgs(list);
     saveCustomImages(list);
-    if (activeCustomImage() === path) {
+    if (activeImg === path) {
       // 删除的是当前启用的图片：切回默认皮肤
       setActiveCustomImage("");
+      setActiveImg("");
       setSkin(DEFAULT_SKIN);
     }
   };
@@ -121,12 +124,13 @@ export default function SkinPicker({
         )}
         {/* 自定义图片图库（多张，hover 出删除） */}
         {customImgs.map((img) => {
-          const active = skin === CUSTOM_SKIN && activeCustomImage() === img;
+          const active = skin === CUSTOM_SKIN && activeImg === img;
           return (
             <div
               key={img}
               onClick={() => {
                 setActiveCustomImage(img);
+                setActiveImg(img);
                 setSkin(CUSTOM_SKIN);
               }}
               className={`group relative aspect-video rounded-xl overflow-hidden cursor-pointer transition-all duration-200 hover:scale-[1.03] hover:shadow-lg ${
@@ -176,7 +180,7 @@ export default function SkinPicker({
         </button>
       </div>
       {/* 自定义皮肤设置区 */}
-      {skin === CUSTOM_SKIN && activeCustomImage() && (
+      {skin === CUSTOM_SKIN && activeImg && (
         <div className="mt-3 p-4 rounded-xl bg-[var(--shade)] flex flex-col gap-3.5">
           <div className="flex items-center gap-3">
             <span className="text-[12.5px] text-[var(--ink-2)] w-[64px] shrink-0">填充方式</span>
