@@ -269,6 +269,7 @@ export const api = {
   /** 用系统浏览器打开链接（release notes 内跳转用） */
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   extractCoverPalette: (url: string) => invoke<string[]>("extract_cover_palette", { url }),
+  assetScopeAllow: (path: string) => invoke<void>("asset_scope_allow", { path }),
   playTrack: (id: number) => invoke<void>("play_track", { id }),
   playSource: (id: number) => invoke<void>("play_source", { id }),
   playPause: () => invoke<void>("play_pause"),

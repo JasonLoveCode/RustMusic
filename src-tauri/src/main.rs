@@ -541,6 +541,7 @@ fn main() {
             commands::delete_playlist,
             commands::rename_playlist,
             commands::reorder_playlists,
+            commands::asset_scope_allow,
             commands::kugou_search,
             commands::kugou_play,
             commands::kugou_lyric,

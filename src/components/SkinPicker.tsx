@@ -3,6 +3,7 @@ import { Check, ImagePlus, RefreshCw, X } from "lucide-react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import Modal from "./Modal";
 import { useStore } from "../store";
+import { api } from "../api";
 import {
   activeCustomImage,
   applySkin,
@@ -55,6 +56,10 @@ export default function SkinPicker({
       const list = [...customImgs, ...paths.filter((p) => !customImgs.includes(p))];
       setCustomImgs(list);
       saveCustomImages(list);
+      // asset 协议作用域默认不含用户任意目录：选图后逐个放行
+      for (const p of paths) {
+        await api.assetScopeAllow(p).catch(() => {});
+      }
       setActiveCustomImage(paths[paths.length - 1]);
       setActiveImg(paths[paths.length - 1]);
       setSkin(CUSTOM_SKIN);

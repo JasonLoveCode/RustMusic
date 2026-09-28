@@ -73,6 +73,7 @@ function DynamicBackdrop() {
               backgroundSize: "var(--skin-fill, cover)",
               backgroundPosition: "center",
               backgroundRepeat: "var(--skin-repeat, no-repeat)",
+              opacity: "var(--skin-img-opacity, 1)",
             }}
           />
           {/* 主题纱：暗色压暗 / 浅色洗成粉彩，保证前景文字可读 */}

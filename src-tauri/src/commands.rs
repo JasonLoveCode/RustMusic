@@ -447,6 +447,14 @@ pub async fn play_source(state: State<'_, AppState>, id: i64) -> Result<(), Stri
     engine_clone(&state).play_url(item.url, info)
 }
 
+/// 运行时放行 asset 协议路径：自定义皮肤图片可能在用户目录任意位置
+#[tauri::command]
+pub async fn asset_scope_allow(app: AppHandle, path: String) -> Result<(), String> {
+    app.asset_protocol_scope()
+        .allow_file(path)
+        .map_err(|e| e.to_string())
+}
+
 // ---------- B 站登录（扫码） ----------
 
 #[tauri::command]

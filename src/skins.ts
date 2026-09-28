@@ -593,6 +593,7 @@ const CUSTOM_IMG_KEY = "rustmusic_custom_skin_img";
 const CUSTOM_FILL_KEY = "rustmusic_custom_skin_fill";
 const CUSTOM_SCRIM_KEY = "rustmusic_custom_skin_scrim";
 const CUSTOM_TEXT_KEY = "rustmusic_custom_skin_text";
+const CUSTOM_ALPHA_KEY = "rustmusic_custom_skin_alpha";
 const CUSTOM_LIST_KEY = "rustmusic_custom_skins";
 
 export type CustomFill = "cover" | "contain" | "stretch" | "tile";
@@ -608,7 +609,7 @@ export interface CustomSkinSettings {
 export function loadCustomSkinSettings(): CustomSkinSettings {
   return {
     fill: (localStorage.getItem(CUSTOM_FILL_KEY) as CustomFill) || "cover",
-    scrim: Number(localStorage.getItem(CUSTOM_SCRIM_KEY) ?? "55"),
+    scrim: Number(localStorage.getItem(CUSTOM_ALPHA_KEY) ?? "70"),
     text: (localStorage.getItem(CUSTOM_TEXT_KEY) as "auto" | "light" | "dark") || "auto",
   };
 }
@@ -616,7 +617,7 @@ export function loadCustomSkinSettings(): CustomSkinSettings {
 /** 保存设置（不含激活图片——激活图片走 setActiveCustomImage，避免互相覆盖） */
 export function saveCustomSkinSettings(s: CustomSkinSettings) {
   localStorage.setItem(CUSTOM_FILL_KEY, s.fill);
-  localStorage.setItem(CUSTOM_SCRIM_KEY, String(s.scrim));
+  localStorage.setItem(CUSTOM_ALPHA_KEY, String(s.scrim));
   localStorage.setItem(CUSTOM_TEXT_KEY, s.text);
 }
 
@@ -635,15 +636,18 @@ export function applyCustomSkinVars() {
   const [size, repeat] = FILL_CSS[s.fill] ?? FILL_CSS.cover;
   root.setProperty("--skin-fill", size);
   root.setProperty("--skin-repeat", repeat);
-  // 透明度滑杆：100 → 纱最轻（0.05），0 → 纱最重（0.85）
-  const a = Math.max(0.05, 0.85 - (s.scrim / 100) * 0.8);
+  // 透明度滑杆直接控制图片可见度：100 = 完整显示，0 = 隐约可见。
+  // 旧映射（纱强度 0→85% 不透明）会把图片完全盖没，观感即"背景消失"
+  const imgOpacity = 0.2 + (s.scrim / 100) * 0.8;
+  root.setProperty("--skin-img-opacity", imgOpacity.toFixed(3));
+  // 纱固定中等强度：保证文字可读，不再随滑杆变化
   root.setProperty(
     "--skin-scrim-dark",
-    `linear-gradient(180deg, rgba(12,10,18,${(a * 0.9).toFixed(3)}) 0%, rgba(12,10,18,${a.toFixed(3)}) 100%)`
+    "linear-gradient(180deg, rgba(12,10,18,0.3) 0%, rgba(12,10,18,0.48) 100%)"
   );
   root.setProperty(
     "--skin-scrim-light",
-    `linear-gradient(180deg, rgba(252,252,254,${(a * 0.9).toFixed(3)}) 0%, rgba(252,252,254,${a.toFixed(3)}) 100%)`
+    "linear-gradient(180deg, rgba(252,252,254,0.28) 0%, rgba(252,252,254,0.45) 100%)"
   );
   if (s.text !== "auto") {
     document.documentElement.dataset.customText = s.text;
