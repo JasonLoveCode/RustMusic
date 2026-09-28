@@ -28,3 +28,6 @@ src-tauri/_*.rs
 
 # Test audio files
 /testdata/
+.tmp-test/
+src-tauri/rust_url.txt
+*.log.bak
