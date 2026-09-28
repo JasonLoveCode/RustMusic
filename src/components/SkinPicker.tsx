@@ -1,7 +1,19 @@
-import { Check } from "lucide-react";
+import { useState } from "react";
+import { Check, ImagePlus, RefreshCw } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import Modal from "./Modal";
 import { useStore } from "../store";
-import { DEFAULT_SKIN, SKINS, skinUri } from "../skins";
+import {
+  applySkin,
+  CUSTOM_SKIN,
+  DEFAULT_SKIN,
+  loadCustomSkinSettings,
+  saveCustomSkinSettings,
+  SKINS,
+  skinUri,
+  type CustomFill,
+  type CustomSkinSettings,
+} from "../skins";
 
 /** 皮肤选择弹窗：背景场景缩略卡片网格，即时切换、选中高亮 */
 export default function SkinPicker({
@@ -13,6 +25,35 @@ export default function SkinPicker({
 }) {
   const skin = useStore((s) => s.skin);
   const setSkin = useStore((s) => s.setSkin);
+  const [custom, setCustom] = useState<CustomSkinSettings>(loadCustomSkinSettings);
+
+  const update = (next: CustomSkinSettings) => {
+    setCustom(next);
+    saveCustomSkinSettings(next);
+    // 自定义皮肤启用中：设置变化即时生效
+    if (skin === CUSTOM_SKIN) applySkin(CUSTOM_SKIN);
+  };
+
+  const pickImage = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const sel = await open({
+        multiple: false,
+        title: "选择皮肤图片",
+        filters: [
+          { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] },
+        ],
+      });
+      if (typeof sel !== "string") return;
+      const next = { ...custom, img: sel };
+      setCustom(next);
+      saveCustomSkinSettings(next);
+      setSkin(CUSTOM_SKIN);
+      useStore.getState().toast("自定义皮肤已应用", "success");
+    } catch (e) {
+      useStore.getState().toast(String(e), "error");
+    }
+  };
 
   const card = (key: string, name: string, desc: string, bg: React.CSSProperties) => {
     const selected = skin === key;
@@ -60,7 +101,112 @@ export default function SkinPicker({
             backgroundPosition: "center",
           })
         )}
+        {/* 自定义图片卡片 */}
+        <button
+          onClick={() => (custom.img ? setSkin(CUSTOM_SKIN) : pickImage())}
+          className={`relative aspect-video rounded-xl overflow-hidden text-left transition-all duration-200 hover:scale-[1.03] hover:shadow-lg ${
+            skin === CUSTOM_SKIN ? "" : "opacity-80"
+          }`}
+          style={
+            custom.img
+              ? { backgroundImage: `url("${convertFileSrc(custom.img)}")`, backgroundSize: "cover", backgroundPosition: "center" }
+              : { background: "var(--shade)" }
+          }
+          title="自定义图片"
+        >
+          {!custom.img && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-[var(--ink-3)]">
+              <ImagePlus size={20} />
+              <span className="text-[11.5px]">选择图片</span>
+            </div>
+          )}
+          {skin === CUSTOM_SKIN && (
+            <span className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-[var(--accent)] text-[var(--accent-on)] flex items-center justify-center shadow">
+              <Check size={12} strokeWidth={3} />
+            </span>
+          )}
+          <div className="absolute inset-x-0 bottom-0 px-2.5 pb-1.5 pt-6 bg-gradient-to-t from-black/60 to-transparent">
+            <div className="text-[12.5px] text-white font-semibold leading-tight drop-shadow">
+              自定义图片
+            </div>
+          </div>
+        </button>
       </div>
+      {/* 自定义皮肤设置区 */}
+      {skin === CUSTOM_SKIN && custom.img && (
+        <div className="mt-3 p-4 rounded-xl bg-[var(--shade)] flex flex-col gap-3.5">
+          <div className="flex items-center gap-3">
+            <span className="text-[12.5px] text-[var(--ink-2)] w-[64px] shrink-0">填充方式</span>
+            <div className="flex gap-1">
+              {(
+                [
+                  ["cover", "封面"],
+                  ["contain", "包含"],
+                  ["stretch", "拉伸"],
+                  ["tile", "平铺"],
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => update({ ...custom, fill: k as CustomFill })}
+                  className={`px-3 py-1 rounded-full text-[12px] transition-colors ${
+                    custom.fill === k
+                      ? "bg-[var(--accent-weak)] text-[var(--accent-strong)] font-medium"
+                      : "text-[var(--ink-2)] hover:bg-[var(--shade-hover)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <button
+              className="ml-auto btn-ghost w-8 h-8 text-[var(--ink-2)]"
+              onClick={pickImage}
+              title="更换图片"
+            >
+              <RefreshCw size={14} />
+            </button>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[12.5px] text-[var(--ink-2)] w-[64px] shrink-0">透明度</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={custom.scrim}
+              onChange={(e) => update({ ...custom, scrim: Number(e.target.value) })}
+              className="flex-1 accent-[var(--accent)]"
+            />
+            <span className="text-[12px] text-[var(--ink-2)] tabular-nums w-10 text-right">
+              {custom.scrim}%
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[12.5px] text-[var(--ink-2)] w-[64px] shrink-0">文字色系</span>
+            <div className="flex gap-1">
+              {(
+                [
+                  ["auto", "自动"],
+                  ["light", "浅色文字"],
+                  ["dark", "深色文字"],
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  onClick={() => update({ ...custom, text: k })}
+                  className={`px-3 py-1 rounded-full text-[12px] transition-colors ${
+                    custom.text === k
+                      ? "bg-[var(--accent-weak)] text-[var(--accent-strong)] font-medium"
+                      : "text-[var(--ink-2)] hover:bg-[var(--shade-hover)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-[10.5px] text-[var(--ink-3)] mt-3 leading-relaxed">
         皮肤替换主界面背景，与浅色/暗色主题、强调色自由组合；播放时封面主色会为壁纸添上一层随音乐呼吸的微光。
       </div>

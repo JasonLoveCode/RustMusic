@@ -9,6 +9,8 @@
  * - 与浅色/暗色主题、强调色自由组合，localStorage 持久化。
  */
 
+import { convertFileSrc } from "@tauri-apps/api/core";
+
 export interface Skin {
   key: string;
   name: string;
@@ -522,6 +524,11 @@ const URI_CACHE = new Map<string, string>();
 
 /** 皮肤背景的 data URI；默认皮肤返回 null（走内置渐变氛围） */
 export function skinUri(key: string): string | null {
+  if (key === CUSTOM_SKIN) {
+    const img = localStorage.getItem(CUSTOM_IMG_KEY);
+    if (!img) return null;
+    return `url("${convertFileSrc(img)}")`;
+  }
   if (!key || key === DEFAULT_SKIN) return null;
   const cached = URI_CACHE.get(key);
   if (cached) return cached;
@@ -537,11 +544,16 @@ export function applySkin(key: string) {
   const uri = skinUri(key);
   if (uri) {
     root.setProperty("--skin-url", uri);
-    // 每套皮肤各自的双主题纱：CSS 按 html[data-theme] 取用对应的一份
-    const skin = SKINS.find((s) => s.key === key);
-    if (skin) {
-      root.setProperty("--skin-scrim-dark", skin.scrimDark);
-      root.setProperty("--skin-scrim-light", skin.scrimLight);
+    if (key === CUSTOM_SKIN) {
+      // 自定义图片：填充方式/纱强度/文字色系全部来自用户设置
+      applyCustomSkinVars();
+    } else {
+      // 每套皮肤各自的双主题纱：CSS 按 html[data-theme] 取用对应的一份
+      const skin = SKINS.find((s) => s.key === key);
+      if (skin) {
+        root.setProperty("--skin-scrim-dark", skin.scrimDark);
+        root.setProperty("--skin-scrim-light", skin.scrimLight);
+      }
     }
   } else {
     root.removeProperty("--skin-url");
@@ -551,6 +563,12 @@ export function applySkin(key: string) {
   // data-skin 标记：CSS 据此切换玻璃/播放条的透明度档位——皮肤启用时
   // 内容大卡片与播放条更透、磨砂更轻，壁纸左右透出一致（默认皮肤不变）
   document.documentElement.dataset.skin = uri ? "on" : "off";
+  // 皮肤键也挂到根元素：CSS 按皮肤×主题组合细分文字三阶色
+  if (uri) {
+    document.documentElement.dataset.skinKey = key;
+  } else {
+    delete document.documentElement.dataset.skinKey;
+  }
 }
 
 export function loadSkin(): string {
@@ -559,4 +577,99 @@ export function loadSkin(): string {
 
 export function saveSkin(key: string) {
   localStorage.setItem(SKIN_KEY, key);
+}
+
+// ---------- 自定义图片皮肤 ----------
+
+export const CUSTOM_SKIN = "custom";
+const CUSTOM_IMG_KEY = "rustmusic_custom_skin_img";
+const CUSTOM_FILL_KEY = "rustmusic_custom_skin_fill";
+const CUSTOM_SCRIM_KEY = "rustmusic_custom_skin_scrim";
+const CUSTOM_TEXT_KEY = "rustmusic_custom_skin_text";
+
+export type CustomFill = "cover" | "contain" | "stretch" | "tile";
+
+export interface CustomSkinSettings {
+  img: string;
+  fill: CustomFill;
+  /** 透明度 0-100：100 = 原图最清晰（纱最轻） */
+  scrim: number;
+  /** 文字色系：auto 采样图片亮度自动选择 */
+  text: "auto" | "light" | "dark";
+}
+
+export function loadCustomSkinSettings(): CustomSkinSettings {
+  return {
+    img: localStorage.getItem(CUSTOM_IMG_KEY) ?? "",
+    fill: (localStorage.getItem(CUSTOM_FILL_KEY) as CustomFill) || "cover",
+    scrim: Number(localStorage.getItem(CUSTOM_SCRIM_KEY) ?? "55"),
+    text: (localStorage.getItem(CUSTOM_TEXT_KEY) as "auto" | "light" | "dark") || "auto",
+  };
+}
+
+export function saveCustomSkinSettings(s: CustomSkinSettings) {
+  localStorage.setItem(CUSTOM_IMG_KEY, s.img);
+  localStorage.setItem(CUSTOM_FILL_KEY, s.fill);
+  localStorage.setItem(CUSTOM_SCRIM_KEY, String(s.scrim));
+  localStorage.setItem(CUSTOM_TEXT_KEY, s.text);
+}
+
+const FILL_CSS: Record<CustomFill, [string, string]> = {
+  cover: ["cover", "no-repeat"],
+  contain: ["contain", "no-repeat"],
+  stretch: ["100% 100%", "no-repeat"],
+  tile: ["auto", "repeat"],
+};
+
+/** 应用自定义皮肤的填充/纱强度/文字色系（改设置后即时调用） */
+export function applyCustomSkinVars() {
+  const s = loadCustomSkinSettings();
+  if (!s.img) return;
+  const root = document.documentElement.style;
+  const [size, repeat] = FILL_CSS[s.fill] ?? FILL_CSS.cover;
+  root.setProperty("--skin-fill", size);
+  root.setProperty("--skin-repeat", repeat);
+  // 透明度滑杆：100 → 纱最轻（0.05），0 → 纱最重（0.85）
+  const a = Math.max(0.05, 0.85 - (s.scrim / 100) * 0.8);
+  root.setProperty(
+    "--skin-scrim-dark",
+    `linear-gradient(180deg, rgba(12,10,18,${(a * 0.9).toFixed(3)}) 0%, rgba(12,10,18,${a.toFixed(3)}) 100%)`
+  );
+  root.setProperty(
+    "--skin-scrim-light",
+    `linear-gradient(180deg, rgba(252,252,254,${(a * 0.9).toFixed(3)}) 0%, rgba(252,252,254,${a.toFixed(3)}) 100%)`
+  );
+  if (s.text !== "auto") {
+    document.documentElement.dataset.customText = s.text;
+  } else {
+    void applyCustomAutoText();
+  }
+}
+
+/** 自动文字色系：采样图片平均亮度，亮图配深字、暗图配浅字 */
+export async function applyCustomAutoText() {
+  const s = loadCustomSkinSettings();
+  if (!s.img) return;
+  try {
+    const img = new Image();
+    img.src = convertFileSrc(s.img);
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = 32;
+    c.height = 32;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0, 32, 32);
+    const d = ctx.getImageData(0, 0, 32, 32).data;
+    let acc = 0;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      acc += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      n++;
+    }
+    const avg = acc / n / 255;
+    document.documentElement.dataset.customText = avg > 0.55 ? "dark" : "light";
+  } catch {
+    document.documentElement.dataset.customText = "light";
+  }
 }

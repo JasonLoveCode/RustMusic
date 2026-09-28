@@ -68,8 +68,9 @@ function DynamicBackdrop() {
             className="absolute inset-0 transition-all duration-500"
             style={{
               backgroundImage: skinUrl,
-              backgroundSize: "cover",
+              backgroundSize: "var(--skin-fill, cover)",
               backgroundPosition: "center",
+              backgroundRepeat: "var(--skin-repeat, no-repeat)",
             }}
           />
           {/* 主题纱：暗色压暗 / 浅色洗成粉彩，保证前景文字可读 */}

@@ -191,11 +191,58 @@ export default function NowPlaying() {
   }, [syncedLines]);
 
   const coverUrl = current ? (current.cover ? coverSrc(current.cover) : "") : "";
+  const theme = useStore((s) => s.theme);
+  const lyricsColors = useStore((s) => s.lyricsColors);
 
   // 封面取色 → 动态渐变背景
   // 远程 http(s) 封面一律走后端提取（QQ 的 y.gtimg.cn 无 CORS，前端 canvas 会被污染）；
   // asset:// 本地封面是 WebView 虚拟主机，后端 ureq 连不上，只能前端采样
   const [palette, setPalette] = useState<string[]>([]);
+  // hsl 字符串 → WCAG 相对亮度
+  const hslRelLum = (hsl: string): number | null => {
+    const m = hsl.match(/hsl\(\s*[\d.]+[,&\s]+([\d.]+)%[,&\s]+([\d.]+)%\s*\)/);
+    if (!m) return null;
+    const h = parseFloat(m[1]) / 360;
+    const s = parseFloat(m[2]) / 100;
+    const l = parseFloat(m[3]) / 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const hp = h * 6;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let r = 0, g = 0, b = 0;
+    if (hp < 1) [r, g, b] = [c, x, 0];
+    else if (hp < 2) [r, g, b] = [x, c, 0];
+    else if (hp < 3) [r, g, b] = [0, c, x];
+    else if (hp < 4) [r, g, b] = [0, x, c];
+    else if (hp < 5) [r, g, b] = [x, 0, c];
+    else [r, g, b] = [c, 0, x];
+    const mm = l - c / 2;
+    const f = (v: number) =>
+      v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+    return 0.2126 * f(r + mm) + 0.7152 * f(g + mm) + 0.0722 * f(b + mm);
+  };
+  // 播放页歌词配色单独设计：背景亮度由「主题底色 + 封面调色板」决定，
+  // 与皮肤无关。自适应始终生效（设置页的自定义配色仅在无调色板时回退）。
+  void lyricsColors;
+  const lyricVars = (() => {
+    if (palette.length < 2) return {};
+    const ls = palette.map(hslRelLum).filter((x): x is number => x != null);
+    if (!ls.length) return {};
+    const tint = ls.reduce((a, b) => a + b, 0) / ls.length;
+    const bgLum = theme === "light" ? 0.87 : 0.04;
+    // 对流渐变层不透明度 0.55，其余为主题底色
+    const eff = bgLum * 0.45 + tint * 0.55;
+    return eff >= 0.45
+      ? {
+          "--lyric-unsung": "rgba(22, 25, 34, 0.96)",
+          "--lyric-dim": "rgba(22, 25, 34, 0.72)",
+          "--lyric-next": "rgba(22, 25, 34, 0.88)",
+        }
+      : {
+          "--lyric-unsung": "rgba(255, 255, 255, 0.98)",
+          "--lyric-dim": "rgba(255, 255, 255, 0.78)",
+          "--lyric-next": "rgba(255, 255, 255, 0.9)",
+        };
+  })();
   useEffect(() => {
     if (!coverUrl) {
       setPalette([]);
@@ -495,7 +542,7 @@ export default function NowPlaying() {
           <div
             ref={scrollRef}
             className="h-full overflow-y-auto py-[28%] lyrics-mask pr-3"
-            style={{ scrollbarWidth: "none" }}
+            style={{ scrollbarWidth: "none", ...(lyricVars as React.CSSProperties) }}
           >
             {lyricsLoading && (
               <div className="text-[var(--ink-3)] text-[13px] text-center pt-20">

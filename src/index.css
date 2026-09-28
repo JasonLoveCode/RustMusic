@@ -25,6 +25,9 @@
   --vignette: rgba(5, 3, 2, 0.55);
   --backdrop-1: #241a10;
   --backdrop-2: #14100b;
+  /* 播放页歌词未唱行的暗色默认：--ink-3 在氛围渐变上太暗（无皮肤时生效；
+     皮肤启用时未定义此变量，跟随各皮肤适配后的 --ink-3） */
+  --lyric-dim: rgba(243, 237, 227, 0.62);
   --bar-tint: rgba(15, 12, 9, 0.82);
   --bar-glass: rgba(26, 21, 16, 0.45);
   --bar-line: rgba(243, 233, 216, 0.08);
@@ -355,6 +358,64 @@ html[data-skin="on"] .glass {
   -webkit-backdrop-filter: blur(9px) saturate(1.12);
 }
 
+/* ---------- 皮肤 × 主题 文字适配 ----------
+   各壁纸明暗差异大：按皮肤键分别校正文字三阶色（全界面生效，
+   含列表/设置/播放页歌词——歌词未唱行的 --lyric-dim 仅在无皮肤时
+   定义，皮肤下自动跟随这里适配过的 --ink-3）。
+   深色主题是默认（无 data-theme），用 :not([data-theme="light"])
+   组合皮肤键，避免覆盖浅色主题的文字色。 */
+
+/* 深色主题下明亮壁纸的皮肤：暗纱压不透亮色场景，奶油色对比不足 → 白字系 */
+html:not([data-theme="light"])[data-skin-key="neon"],
+html:not([data-theme="light"])[data-skin-key="sunset"],
+html:not([data-theme="light"])[data-skin-key="ink"],
+html:not([data-theme="light"])[data-skin-key="snow"],
+html:not([data-theme="light"])[data-skin-key="desert"],
+html:not([data-theme="light"])[data-skin-key="sakura"],
+html:not([data-theme="light"])[data-skin-key="wheat"],
+html:not([data-theme="light"])[data-skin-key="forest"] {
+  --ink: #ffffff;
+  --ink-2: rgba(255, 255, 255, 0.82);
+  --ink-3: rgba(255, 255, 255, 0.58);
+}
+
+/* 浅色主题下暗壁纸的皮肤：白纱提不亮深色场景，深字对比不足 → 亮字系 */
+/* 初雪浅色：雪原亮但远山蓝灰，次级/三级文字需加深才可读 */
+html[data-theme="light"][data-skin-key="snow"] {
+  --ink-2: rgba(24, 34, 48, 0.85);
+  --ink-3: rgba(24, 34, 48, 0.68);
+}
+
+html[data-theme="light"][data-skin-key="firefly"] {
+  --ink: #f6f4ef;
+  --ink-2: rgba(246, 244, 239, 0.8);
+  --ink-3: rgba(246, 244, 239, 0.55);
+}
+
+/* 晚霞浅色：亮度不均（中紫→亮橙→深紫），深字平均可读性更好 */
+html[data-theme="light"][data-skin-key="sunset"] {
+  --ink-2: rgba(38, 32, 42, 0.85);
+  --ink-3: rgba(38, 32, 42, 0.66);
+}
+
+/* 麦浪浅色：金麦田亮背景，深字系 */
+html[data-theme="light"][data-skin-key="wheat"] {
+  --ink-2: rgba(40, 38, 28, 0.85);
+  --ink-3: rgba(40, 38, 28, 0.66);
+}
+
+/* ---------- 自定义图片皮肤：文字色系（浅色文字/深色文字/自动采样） ---------- */
+html[data-custom-text="light"] {
+  --ink: #f6f4ef;
+  --ink-2: rgba(246, 244, 239, 0.8);
+  --ink-3: rgba(246, 244, 239, 0.55);
+}
+html[data-custom-text="dark"] {
+  --ink: #242836;
+  --ink-2: rgba(36, 40, 54, 0.85);
+  --ink-3: rgba(36, 40, 54, 0.62);
+}
+
 
 
 /* 强调色光标跟随侧栏按钮（选中指示条弹性进入） */
@@ -420,7 +481,7 @@ html[data-skin="on"] .glass {
     font-weight 0.5s ease,
     opacity 0.5s ease,
     transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
-  color: var(--ink-3);
+  color: var(--lyric-dim, var(--ink-3));
   font-size: 20px;
   font-weight: 600;
 }
