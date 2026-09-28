@@ -16,7 +16,7 @@
   --ink-2: #b3a897;
   --ink-3: #7d7365;
   --line: rgba(243, 233, 216, 0.09);
-  --glass-bg: rgba(255, 244, 228, 0.045);
+  --glass-bg: rgba(13, 10, 8, 0.38);
   --glass-bg-strong: rgba(26, 21, 16, 0.72);
   --glass-line: rgba(243, 233, 216, 0.1);
   --shade: rgba(243, 233, 216, 0.05);
@@ -63,9 +63,9 @@ html[data-theme="light"] {
   --ink-2: #5d6a7e;
   --ink-3: #8d99ab;
   --line: rgba(43, 53, 70, 0.1);
-  --glass-bg: rgba(255, 255, 255, 0.42);
-  --glass-bg-strong: rgba(250, 252, 255, 0.88);
-  --glass-line: rgba(255, 255, 255, 0.75);
+  --glass-bg: rgba(43, 53, 70, 0.05);
+  --glass-bg-strong: rgba(236, 240, 247, 0.97);
+  --glass-line: transparent;
   --shade: rgba(43, 53, 70, 0.055);
   --shade-strong: rgba(43, 53, 70, 0.1);
   --shade-hover: rgba(43, 53, 70, 0.045);
@@ -73,8 +73,8 @@ html[data-theme="light"] {
   --backdrop-1: #e7ecf4;
   --backdrop-2: #eef1f7;
   --bar-tint: rgba(238, 241, 247, 0.88);
-  --bar-glass: rgba(255, 255, 255, 0.55);
-  --bar-line: rgba(255, 255, 255, 0.45);
+  --bar-glass: rgba(43, 53, 70, 0.07);
+  --bar-line: rgba(43, 53, 70, 0.12);
   --bar-shadow: 0 12px 32px -12px rgba(37, 50, 68, 0.28);
   --cover-shadow-sm: 0 4px 14px rgba(37, 50, 68, 0.22);
   --cover-shadow-lg: 0 36px 90px -18px rgba(37, 50, 68, 0.42);
@@ -171,7 +171,6 @@ body.dragging-rows * {
 
 .glass {
   background: var(--glass-bg);
-  border: 1px solid var(--line);
   backdrop-filter: blur(20px) saturate(1.3);
   -webkit-backdrop-filter: blur(20px) saturate(1.3);
 }
@@ -190,86 +189,12 @@ body.dragging-rows * {
    · 对角高光渐变 = 参考 ::after 的 45° 白色渐变（端点亮、中部透）
    · 外阴影浮起 */
 
-html[data-theme="light"] .glass {
-  background:
-    linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.92) 0%,
-      rgba(255, 255, 255, 0.38) 24%,
-      rgba(255, 255, 255, 0.16) 50%,
-      rgba(255, 255, 255, 0.4) 78%,
-      rgba(255, 255, 255, 0.9) 100%
-    ),
-    rgba(255, 255, 255, 0.34);
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  box-shadow:
-    inset 2px -2px 1px -1px rgba(255, 255, 255, 0.95),
-    inset -2px 2px 1px -1px rgba(255, 255, 255, 0.95),
-    inset 6px -6px 1px -6px rgba(255, 255, 255, 0.65),
-    inset -6px 6px 1px -6px rgba(255, 255, 255, 0.65),
-    inset 0 0 12px rgba(47, 62, 84, 0.07),
-    0 6px 22px -8px rgba(37, 50, 68, 0.16),
-    0 1px 2px rgba(37, 50, 68, 0.06);
-  backdrop-filter: blur(16px) saturate(1.4);
-  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+/* 浅色下的下拉选项底色（原生下拉需要实底） */
+html[data-theme="light"] select option {
+  background: #f6f8fc;
+  color: var(--ink);
 }
 
-html[data-theme="light"] .glass-strong {
-  background: linear-gradient(
-    150deg,
-    rgba(255, 255, 255, 0.96) 0%,
-    rgba(246, 249, 253, 0.9) 55%,
-    rgba(255, 255, 255, 0.94) 100%
-  );
-  border: 1px solid rgba(255, 255, 255, 0.95);
-  box-shadow:
-    inset 2px -2px 1px -1px rgba(255, 255, 255, 0.95),
-    inset -2px 2px 1px -1px rgba(255, 255, 255, 0.95),
-    inset 0 0 10px rgba(47, 62, 84, 0.05),
-    0 16px 44px -14px rgba(37, 50, 68, 0.24);
-  backdrop-filter: blur(28px) saturate(1.25);
-  -webkit-backdrop-filter: blur(28px) saturate(1.25);
-}
-
-/* 浅色下的次级按钮：玻璃质感（白渐变 + 边缘高光） */
-html[data-theme="light"] .btn-secondary {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.95) 0%,
-    rgba(255, 255, 255, 0.55) 60%,
-    rgba(255, 255, 255, 0.85) 100%
-  );
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  box-shadow:
-    inset 1px -1px 1px -1px rgba(255, 255, 255, 0.95),
-    inset -1px 1px 1px -1px rgba(255, 255, 255, 0.95),
-    0 2px 8px rgba(37, 50, 68, 0.1);
-}
-html[data-theme="light"] .btn-secondary:hover {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 1) 0%,
-    rgba(255, 255, 255, 0.75) 60%,
-    rgba(255, 255, 255, 0.95) 100%
-  );
-  border-color: rgba(255, 255, 255, 1);
-}
-
-/* 浅色下的输入框 / 下拉：玻璃质感 */
-html[data-theme="light"] select,
-html[data-theme="light"] input[type="text"],
-html[data-theme="light"] input[type="url"] {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.9) 0%,
-    rgba(255, 255, 255, 0.6) 100%
-  );
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  box-shadow:
-    inset 1px 1px 1px -1px rgba(255, 255, 255, 0.9),
-    inset 0 0 8px rgba(47, 62, 84, 0.04),
-    0 1px 4px rgba(37, 50, 68, 0.08);
-}
 html[data-theme="light"] select option {
   background: #f6f8fc;
   color: var(--ink);
@@ -421,8 +346,8 @@ html[data-skin="on"] {
 }
 
 html[data-theme="light"][data-skin="on"] {
-  --glass-bg: rgba(255, 255, 255, 0.3);
-  --bar-glass: rgba(255, 255, 255, 0.38);
+  --glass-bg: rgba(43, 53, 70, 0.07);
+  --bar-glass: rgba(43, 53, 70, 0.09);
 }
 
 html[data-skin="on"] .glass {
@@ -430,18 +355,7 @@ html[data-skin="on"] .glass {
   -webkit-backdrop-filter: blur(9px) saturate(1.12);
 }
 
-html[data-theme="light"][data-skin="on"] .glass {
-  background:
-    linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.5) 0%,
-      rgba(255, 255, 255, 0.16) 24%,
-      rgba(255, 255, 255, 0.07) 50%,
-      rgba(255, 255, 255, 0.18) 78%,
-      rgba(255, 255, 255, 0.46) 100%
-    ),
-    rgba(255, 255, 255, 0.14);
-}
+
 
 /* 强调色光标跟随侧栏按钮（选中指示条弹性进入） */
 @keyframes indicatorIn {
@@ -653,6 +567,13 @@ input[type="url"] {
   outline: none;
 }
 
+/* 输入框/下拉统一无描边：模块化由底色表达 */
+input[type="text"],
+input[type="url"],
+select {
+  border-color: transparent !important;
+}
+
 .btn-ghost {
   display: inline-flex;
   align-items: center;
@@ -709,7 +630,6 @@ input[type="url"] {
   font-size: 13px;
   color: var(--ink);
   background: var(--shade);
-  border: 1px solid var(--line);
   transition:
     background 0.16s,
     color 0.16s,

@@ -105,7 +105,9 @@ export default function Sidebar() {
                   active
                     ? {
                         background: "var(--accent-weak)",
-                        border: "1px solid var(--accent-weak)",
+                        // 与背景同色的半透明边框会在 1px 内叠加出更亮的描边，
+                        // 这里保持透明边框（占位对齐）只用背景表达选中
+                        border: "1px solid transparent",
                       }
                     : { border: "1px solid transparent" }
                 }

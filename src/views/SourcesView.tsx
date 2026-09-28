@@ -872,7 +872,7 @@ export default function SourcesView() {
               </button>
               {biliLoggedIn && (
                 <button
-                  className="btn-ghost h-9 px-2 text-[12px] shrink-0 text-[var(--ink-2)]"
+                  className="btn-secondary h-9 px-3 text-[12px] shrink-0 flex items-center gap-1.5"
                   onClick={() => biliLogout()}
                   title="退出 B 站登录"
                 >

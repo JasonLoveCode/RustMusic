@@ -406,6 +406,43 @@ fn main() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            // 无框窗口关掉 DWM 边框后 Win11 会失去圆角，这里单独设回圆角
+            //（DWMWA_WINDOW_CORNER_PREFERENCE = ROUND；Win10 无此属性，静默忽略）
+            if let Some(main) = app.get_webview_window("main") {
+                use windows::Win32::Foundation::HWND;
+                use windows::Win32::Graphics::Dwm::{
+                    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE,
+                    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+                };
+                if let Ok(hwnd) = main.hwnd() {
+                    // 圆角
+                    let pref = DWMWCP_ROUND;
+                    let res = unsafe {
+                        DwmSetWindowAttribute(
+                            HWND(hwnd.0 as *mut _),
+                            DWMWA_WINDOW_CORNER_PREFERENCE,
+                            &pref as *const _ as *const std::ffi::c_void,
+                            std::mem::size_of_val(&pref) as u32,
+                        )
+                    };
+                    if let Err(e) = res {
+                        eprintln!("[win] 圆角设置失败（Win10 不支持，可忽略）: {e}");
+                    }
+                    // Win11 对活动窗口会画一圈系统强调色描边，置 NONE 去掉
+                    let none = DWMWA_COLOR_NONE;
+                    let res2 = unsafe {
+                        DwmSetWindowAttribute(
+                            HWND(hwnd.0 as *mut _),
+                            DWMWA_BORDER_COLOR,
+                            &none as *const _ as *const std::ffi::c_void,
+                            std::mem::size_of_val(&none) as u32,
+                        )
+                    };
+                    if let Err(e) = res2 {
+                        eprintln!("[win] 边框颜色设置失败（Win10 不支持，可忽略）: {e}");
+                    }
+                }
+            }
             let app_data = handle.path().app_data_dir().map_err(|e| e.to_string())?;
             std::fs::create_dir_all(app_data.join("covers")).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(app_data.join("downloads")).map_err(|e| e.to_string())?;
@@ -507,6 +544,16 @@ fn main() {
             commands::kugou_search,
             commands::kugou_play,
             commands::kugou_lyric,
+            commands::kugou_qr_create,
+            commands::kugou_qr_check,
+            commands::kugou_status,
+            commands::kugou_logout,
+            commands::kugou_toplists,
+            commands::kugou_toplist_tracks,
+            commands::kugou_random_playlist,
+            commands::kugou_playlist_tracks,
+            commands::kugou_user_playlists,
+            commands::kugou_import_playlist,
             commands::add_to_playlist,
             commands::remove_from_playlist,
             commands::list_sources,

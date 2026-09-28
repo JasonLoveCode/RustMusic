@@ -108,12 +108,14 @@ interface Store {
   qqNickname: string;
   qqCache: Record<string, QqSong>;
 
-  /** 酷狗在线曲库（匿名，免登录） */
+  /** 酷狗在线曲库（搜索/播放匿名；VIP 曲目需扫码登录） */
   kugouResults: KgSong[];
   kugouSearching: boolean;
   kugouSearched: boolean;
   kugouPage: number;
   kugouCache: Record<string, KgSong>;
+  kugouLoggedIn: boolean;
+  kugouNickname: string;
 
   /** B 站曲目元数据缓存（键 = rid "BVxxx-cid"，我喜欢/播放列表/队列条目用） */
   biliCache: Record<string, BiliTrack>;
@@ -314,6 +316,11 @@ interface Store {
 
   qqSearch(kw: string, append?: boolean): Promise<void>;
   kugouSearch(kw: string, append?: boolean): Promise<void>;
+  kugouRefreshStatus(): Promise<void>;
+  kugouSetLogin(loggedIn: boolean, nickname: string): void;
+  kugouLogout(): Promise<void>;
+  /** 收藏在线发现的酷狗歌单为本地播放列表（global_collection_id） */
+  importKugouPlaylist(remotePid: string, name: string, opts?: { quiet?: boolean }): Promise<number | null>;
   qqRefreshStatus(): Promise<void>;
   qqSetLogin(loggedIn: boolean, nickname: string): void;
   qqLogout(): Promise<void>;
@@ -370,17 +377,18 @@ interface Store {
   removePlaylistEntryRow(rowid: number): Promise<void>;
   importNeteasePlaylist(remotePid: number, name: string, opts?: { quiet?: boolean }): Promise<number | null>;
   importQqPlaylist(remotePid: number, name: string, opts?: { quiet?: boolean }): Promise<number | null>;
-  /** 两个平台共用的导入实现：返回本次新增数，失败返回 null */
+  /** 三个平台共用的导入实现：返回本次新增数，失败返回 null。
+   *  酷狗用 global_collection_id（字符串）作为远程歌单 ID */
   importOnline(
-    source: "netease" | "qq",
-    remotePid: number,
+    source: "netease" | "qq" | "kugou",
+    remotePid: number | string,
     name: string,
     opts?: { quiet?: boolean }
   ): Promise<number | null>;
   /** 依次导入账号下全部歌单（quiet 逐个导入，结束时统一刷新 + 汇总提示） */
   importAllPlaylists(
-    source: "netease" | "qq",
-    list: { id: number; name: string; trackCount: number }[],
+    source: "netease" | "qq" | "kugou",
+    list: { id: number | string; name: string; trackCount: number }[],
     onProgress?: (p: { done: number; total: number; name: string }) => void
   ): Promise<{ added: number; failed: number }>;
 
@@ -468,6 +476,7 @@ function applyPlayState(p: PlayState, posOverride?: number) {
     cur.durationMs === p.durationMs &&
     cur.nid === (p.nid ?? null) &&
     cur.qid === (p.qid ?? null) &&
+    cur.kgid === (p.kgid ?? null) &&
     cur.quality === (p.quality ?? null) &&
     cur.liked === liked;
   set({
@@ -485,6 +494,7 @@ function applyPlayState(p: PlayState, posOverride?: number) {
             durationMs: p.durationMs,
             nid: p.nid ?? null,
             qid: p.qid ?? null,
+            kgid: p.kgid ?? null,
             quality: p.quality ?? null,
             liked,
           },
@@ -659,6 +669,8 @@ export const useStore = create<Store>((set, get) => ({
   kugouSearched: false,
   kugouPage: 1,
   kugouCache: {},
+  kugouLoggedIn: false,
+  kugouNickname: "",
 
   biliCache: {},
   biliLoggedIn: false,
@@ -845,7 +857,7 @@ export const useStore = create<Store>((set, get) => ({
     );
 
     try {
-      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus, biliStatus] =
+      const [settings, tracks, folders, playlists, sources, neteaseStatus, qqStatus, biliStatus, kugouStatus] =
         await Promise.all([
           api.getSettings(),
           api.listTracks(),
@@ -855,6 +867,7 @@ export const useStore = create<Store>((set, get) => ({
           api.neteaseStatus(),
           api.qqStatus(),
           api.biliStatus(),
+          api.kugouStatus(),
         ]);
       set({
         theme: loadTheme(),
@@ -874,6 +887,8 @@ export const useStore = create<Store>((set, get) => ({
         qqNickname: qqStatus.nickname,
         biliLoggedIn: biliStatus.loggedIn,
         biliNickname: biliStatus.nickname,
+        kugouLoggedIn: kugouStatus.loggedIn,
+        kugouNickname: kugouStatus.nickname,
         quality: settings.quality,
         closeAction: settings.closeAction ?? "tray",
         autoUpdate: settings.autoUpdate ?? true,
@@ -1127,6 +1142,8 @@ export const useStore = create<Store>((set, get) => ({
           durationMs: Math.round(e.duration * 1000),
           cover: e.cover,
           vip: e.vip ?? false,
+          // media_mid 列存专辑音频 ID（播放/导入时写入），恢复播放可用
+          albumAudioId: Number(e.mediaMid) || 0,
         };
         queue.push({ kind: "kugou", id: e.onlineId });
       } else if (e.kind === "bilibili" && e.onlineId) {
@@ -1206,6 +1223,7 @@ export const useStore = create<Store>((set, get) => ({
         durationMs: Math.round(e.duration * 1000),
         cover: e.cover,
         vip: e.vip ?? false,
+        albumAudioId: Number(e.mediaMid) || 0,
       };
       set({ kugouCache });
       return { kind: "kugou", id: e.onlineId };
@@ -1336,6 +1354,11 @@ export const useStore = create<Store>((set, get) => ({
           cover: t.cover,
           durationMs: t.durationMs,
           vip: t.vip ?? false,
+          albumAudioId: t.albumAudioId ?? 0,
+          albumId: t.albumId ?? 0,
+          hqHash: t.hqHash ?? "",
+          sqHash: t.sqHash ?? "",
+          superHash: t.superHash ?? "",
         })
         .then(ok)
         .catch((e) => fail(String(e)));
@@ -1972,6 +1995,29 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
+  async kugouRefreshStatus() {
+    try {
+      const s = await api.kugouStatus();
+      set({ kugouLoggedIn: s.loggedIn, kugouNickname: s.nickname });
+    } catch {}
+  },
+
+  kugouSetLogin(loggedIn, nickname) {
+    set((s) => {
+      const unavailable = Object.fromEntries(
+        Object.entries(s.unavailable).filter(([k]) => !k.startsWith("kugou:"))
+      );
+      return { kugouLoggedIn: loggedIn, kugouNickname: nickname, unavailable };
+    });
+  },
+
+  async kugouLogout() {
+    try {
+      await api.kugouLogout();
+    } catch {}
+    get().kugouSetLogin(false, "");
+  },
+
   async qqRefreshStatus() {
     try {
       const s = await api.qqStatus();
@@ -2202,21 +2248,21 @@ export const useStore = create<Store>((set, get) => ({
     return get().importOnline("qq", remotePid, name, opts);
   },
 
-  async importOnline(
-    source: "netease" | "qq",
-    remotePid: number,
-    name: string,
-    opts?: { quiet?: boolean }
-  ): Promise<number | null> {
+  async importKugouPlaylist(remotePid: string, name: string, opts) {
+    return get().importOnline("kugou", remotePid, name, opts);
+  },
+
+  async importOnline(source, remotePid, name, opts) {
     const quiet = opts?.quiet ?? false;
     try {
       // 合并语义：同名/同远程 id 的已有列表直接补新歌（去重、不动顺序），
       // 没有才新建——由后端统一判断
-      const invoke =
+      const [, added] =
         source === "netease"
-          ? api.neteaseImportPlaylist
-          : api.qqImportPlaylist;
-      const [, added] = await invoke(remotePid, name);
+          ? await api.neteaseImportPlaylist(remotePid as number, name)
+          : source === "qq"
+            ? await api.qqImportPlaylist(remotePid as number, name)
+            : await api.kugouImportPlaylist(String(remotePid), name);
       if (!quiet) {
         await get().refreshPlaylists();
         get().toast(
@@ -2241,8 +2287,10 @@ export const useStore = create<Store>((set, get) => ({
       onProgress?.({ done: i, total: list.length, name: p.name });
       const r =
         source === "netease"
-          ? await get().importNeteasePlaylist(p.id, p.name, { quiet: true })
-          : await get().importQqPlaylist(p.id, p.name, { quiet: true });
+          ? await get().importNeteasePlaylist(p.id as number, p.name, { quiet: true })
+          : source === "qq"
+            ? await get().importQqPlaylist(p.id as number, p.name, { quiet: true })
+            : await get().importKugouPlaylist(String(p.id), p.name, { quiet: true });
       if (r == null) failed++;
       else added += r;
     }
@@ -2360,9 +2408,11 @@ export const useStore = create<Store>((set, get) => ({
           ? await api.neteaseLyric(Number(id))
           : kind === "qq"
             ? await api.qqLyric(id)
-            : kind === "bili"
-              ? await api.biliLyric(id)
-              : await api.getLyrics(Number(id));
+            : kind === "kug"
+              ? await api.kugouLyric(id)
+              : kind === "bili"
+                ? await api.biliLyric(id)
+                : await api.getLyrics(Number(id));
       if (get().lyricsFor === key) {
         set({ lyrics: payload, lyricsLoading: false });
         pushDesktopLyrics(get());

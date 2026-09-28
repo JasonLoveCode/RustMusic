@@ -517,6 +517,9 @@ export default function SettingsView() {
                 </button>
               ))}
             </div>
+            <span className="text-[11px] text-[var(--ink-3)]">
+              VIP 曲目与高音质需在各音源页扫码登录后按账号权益播放
+            </span>
           </div>
           <div className="flex items-center gap-4">
             <span className="text-[12.5px] text-[var(--ink-2)] w-[80px]">播放速度</span>

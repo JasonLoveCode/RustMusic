@@ -1094,7 +1094,7 @@ pub async fn qq_lyric(
     })
 }
 
-// ---------- 酷狗音乐在线曲库（匿名，免登录） ----------
+// ---------- 酷狗音乐在线曲库（搜索/播放匿名；VIP 曲目需扫码登录） ----------
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1112,6 +1112,65 @@ pub struct KgPlayReq {
     /// 搜索结果里的付费标志，用于播放失败分类
     #[serde(default)]
     pub vip: bool,
+    /// 专辑音频 ID / 专辑 ID / 各音质 hash：登录后按音质取链接用，
+    /// 旧收藏条目可缺省（serde default）
+    #[serde(default)]
+    pub album_audio_id: u64,
+    #[serde(default)]
+    pub album_id: u64,
+    #[serde(default)]
+    pub hq_hash: String,
+    #[serde(default)]
+    pub sq_hash: String,
+    #[serde(default)]
+    pub super_hash: String,
+}
+
+/// 酷狗登录凭证（token + userid），未登录为空串
+fn kg_credential(state: &State<AppState>) -> (String, String) {
+    let conn = state.db.lock();
+    (
+        db::get_setting(&conn, "kg_token").unwrap_or_default(),
+        db::get_setting(&conn, "kg_userid").unwrap_or_default(),
+    )
+}
+
+/// 调用酷狗接口前的统一准备：注入登录账号与持久化的注册 dfid。
+/// dfid 缺失时（首次）触发设备注册并持久化——匿名随机 dfid 会被风控拦截。
+fn kg_prepare(state: &State<AppState>) -> (String, String) {
+    let (token, userid) = kg_credential(state);
+    crate::kugou::set_account(&token, &userid);
+    // mid 与 dfid 服务端绑定校验，必须成对持久化、成对注入
+    let (mid, dfid) = {
+        let conn = state.db.lock();
+        (
+            db::get_setting(&conn, "kg_mid").unwrap_or_default(),
+            db::get_setting(&conn, "kg_dfid").unwrap_or_default(),
+        )
+    };
+    if mid.is_empty() || dfid.is_empty() {
+        // 进程内可能已有可用 pair（gateway 请求路径触发过注册）：同步落库
+        let cached = crate::kugou::current_dfid();
+        if !cached.is_empty() {
+            let m = crate::kugou::current_mid();
+            let conn = state.db.lock();
+            db::set_setting(&conn, "kg_mid", &m);
+            db::set_setting(&conn, "kg_dfid", &cached);
+        } else {
+            match crate::kugou::register_dev() {
+                Ok(d) => {
+                    let m = crate::kugou::current_mid();
+                    let conn = state.db.lock();
+                    db::set_setting(&conn, "kg_mid", &m);
+                    db::set_setting(&conn, "kg_dfid", &d);
+                }
+                Err(e) => eprintln!("[kugou] register_dev 失败: {e}"),
+            }
+        }
+    } else {
+        crate::kugou::set_device(&mid, &dfid);
+    }
+    (token, userid)
 }
 
 #[tauri::command]
@@ -1122,8 +1181,23 @@ pub async fn kugou_search(keyword: String, page: Option<i64>) -> Result<serde_js
 
 #[tauri::command]
 pub async fn kugou_play(state: State<'_, AppState>, track: KgPlayReq) -> Result<(), String> {
-    let (url, ext) = crate::kugou::song_url(&track.hash, track.vip)?;
-    let quality_label = quality_tag(&ext, 128);
+    let quality = {
+        let conn = state.db.lock();
+        db::get_setting(&conn, "quality").unwrap_or_else(|| "high".to_string())
+    };
+    let (token, userid) = kg_prepare(&state);
+    let (url, _ext, quality_label) = crate::kugou::song_url(
+        &track.hash,
+        track.album_audio_id,
+        track.album_id,
+        &track.hq_hash,
+        &track.sq_hash,
+        &track.super_hash,
+        track.vip,
+        &token,
+        &userid,
+        &quality,
+    )?;
     // 封面：数据库存的完整 URL 优先（收藏/最近播放已入库），缺失用搜索带的
     let cover = {
         let conn = state.db.lock();
@@ -1148,7 +1222,8 @@ pub async fn kugou_play(state: State<'_, AppState>, track: KgPlayReq) -> Result<
         kgid: Some(track.hash.clone()),
         quality: Some(quality_label),
     };
-    // 记录到“最近播放”（在线曲目元数据轻量入库）
+    // 记录到“最近播放”（在线曲目元数据轻量入库；album_audio_id 存入
+    // media_mid 列，恢复播放时能带全取链接参数）
     {
         let conn = state.db.lock();
         db::record_play_online(
@@ -1160,7 +1235,7 @@ pub async fn kugou_play(state: State<'_, AppState>, track: KgPlayReq) -> Result<
             &track.album,
             &cover,
             track.duration_ms as i64,
-            "",
+            &track.album_audio_id.to_string(),
             track.vip,
         );
     }
@@ -1190,6 +1265,141 @@ pub async fn kugou_lyric(
         lines: p.lines,
     })
 }
+
+// ---------- 酷狗扫码登录 ----------
+
+#[tauri::command]
+pub async fn kugou_qr_create() -> Result<serde_json::Value, String> {
+    let (key, qr) = crate::kugou::qr_create()?;
+    Ok(json!({ "key": key, "qr": qr }))
+}
+
+#[tauri::command]
+pub async fn kugou_qr_check(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<serde_json::Value, String> {
+    let r = crate::kugou::qr_check(&key)?;
+    if r.status == "success" {
+        if let (Some(token), Some(userid)) = (&r.token, &r.userid) {
+            crate::kugou::set_account(token, userid);
+            let conn = state.db.lock();
+            db::set_setting(&conn, "kg_token", token);
+            db::set_setting(&conn, "kg_userid", userid);
+            if let Some(nick) = &r.nickname {
+                db::set_setting(&conn, "kg_nickname", nick);
+            }
+            if let Some(vt) = r.vip_type {
+                db::set_setting(&conn, "kg_vip_type", &vt.to_string());
+            }
+        }
+    }
+    Ok(json!({ "status": r.status, "nickname": r.nickname }))
+}
+
+#[tauri::command]
+pub async fn kugou_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock();
+    let token = db::get_setting(&conn, "kg_token").unwrap_or_default();
+    let nickname = db::get_setting(&conn, "kg_nickname").unwrap_or_default();
+    Ok(json!({ "loggedIn": !token.is_empty(), "nickname": nickname }))
+}
+
+#[tauri::command]
+pub async fn kugou_logout(state: State<'_, AppState>) -> Result<(), String> {
+    let conn = state.db.lock();
+    db::set_setting(&conn, "kg_token", "");
+    db::set_setting(&conn, "kg_userid", "");
+    db::set_setting(&conn, "kg_nickname", "");
+    db::set_setting(&conn, "kg_vip_type", "");
+    Ok(())
+}
+
+// ---------- 酷狗榜单 / 歌单广场（匿名） ----------
+
+#[tauri::command]
+pub async fn kugou_toplists() -> Result<serde_json::Value, String> {
+    let toplists = crate::kugou::toplists()?;
+    Ok(json!({ "toplists": toplists }))
+}
+
+#[tauri::command]
+pub async fn kugou_toplist_tracks(
+    state: State<'_, AppState>,
+    top_id: i64,
+    page: Option<i64>,
+) -> Result<serde_json::Value, String> {
+    let _ = kg_prepare(&state);
+    let songs = crate::kugou::toplist_tracks(top_id, page.unwrap_or(1))?;
+    Ok(json!({ "songs": songs }))
+}
+
+#[tauri::command]
+pub async fn kugou_random_playlist(
+    state: State<'_, AppState>,
+) -> Result<crate::kugou::KgPublicPlaylist, String> {
+    let _ = kg_prepare(&state);
+    crate::kugou::random_playlist()
+}
+
+#[tauri::command]
+pub async fn kugou_playlist_tracks(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<crate::kugou::KgPublicPlaylist, String> {
+    let _ = kg_prepare(&state);
+    crate::kugou::playlist_tracks(&id)
+}
+
+/// 酷狗账号下的自建/收藏歌单（需扫码登录）
+#[tauri::command]
+pub async fn kugou_user_playlists(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::kugou::KgUserPlaylist>, String> {
+    let (token, userid) = kg_prepare(&state);
+    crate::kugou::user_playlists(&token, &userid)
+}
+
+/// 酷狗公开歌单导入为本地播放列表（匿名可拉，无需登录）
+#[tauri::command]
+pub async fn kugou_import_playlist(
+    state: State<'_, AppState>,
+    remote_pid: String,
+    name: String,
+) -> Result<(i64, i64), String> {
+    let _ = kg_prepare(&state);
+    let songs = crate::kugou::playlist_tracks(&remote_pid)?;
+    let (list_id, added) = {
+        let conn = state.db.lock();
+        let pid = match db::find_playlist_by_remote(&conn, "kugou", &remote_pid, &name) {
+            Some(id) => id,
+            None => db::create_playlist(&conn, &name)?,
+        };
+        db::set_playlist_remote(&conn, pid, "kugou", &remote_pid);
+        db::set_playlist_origin(&conn, pid, &name);
+        let mut added = 0i64;
+        for t in &songs.songs {
+            db::upsert_online_track(
+                &conn,
+                "kugou",
+                &t.id,
+                &t.name,
+                &t.singer,
+                &t.album,
+                &t.cover,
+                t.duration_ms as i64,
+                &t.album_audio_id.to_string(),
+                t.vip,
+            );
+            if db::add_online_to_playlist(&conn, pid, "kugou", &t.id)? {
+                added += 1;
+            }
+        }
+        (pid, added)
+    };
+    Ok((list_id, added))
+}
+
 
 #[tauri::command]
 pub async fn qq_qr_create() -> Result<serde_json::Value, String> {
@@ -1413,7 +1623,14 @@ pub async fn download_online(
                 crate::qq::song_url(&req.id, &req.media_mid, &musicid, &musickey, &quality, true)?;
             (u, ext)
         }
-        "kugou" => crate::kugou::song_url(&req.id, true)?,
+        "kugou" => {
+            let (token, userid) = kg_prepare(&state);
+            // media_mid 列存的是专辑音频 ID（最近播放/歌单导入时写入）
+            let album_audio_id = req.media_mid.parse().unwrap_or(0);
+            let (u, ext, _label) =
+                crate::kugou::song_url(&req.id, album_audio_id, 0, "", "", "", true, &token, &userid, &quality)?;
+            (u, ext)
+        }
         "bilibili" => {
             // rid = "BVxxx-cid"；存为 .m4a（内容是 fragmented MP4，symphonia 可解）
             let (bvid, cid) = crate::bilibili::parse_rid(&req.id)?;
@@ -1499,6 +1716,7 @@ pub async fn download_online(
         .ok()
         .flatten(),
         "qq" => crate::qq::lyric(&req.id).ok().flatten(),
+        "kugou" => crate::kugou::lyric(&req.id).ok().flatten(),
         _ => None,
     };
     if req.kind != "bilibili" {

@@ -208,6 +208,76 @@ pub fn yrc_to_enhanced_lrc(yrc: &str) -> Option<String> {
     Some(out)
 }
 
+/// KRC（酷狗逐字歌词）→ 增强 LRC。KRC 行格式（解密解压后）：
+///   [行起始ms,行持续ms]<字起始ms,字持续ms,0>字<字起始,字持续,0>字…
+/// 与 yrc/QRC 相反，时间元组跟在字**前面**（尖括号包裹）；头部另有
+/// [ti:]/[ar:]/[offset:0] 等元数据行（带冒号），逐行跳过。
+/// 无法解析出任何歌词行时返回 None（调用方回落行级 LRC）。
+pub fn krc_to_enhanced_lrc(krc: &str) -> Option<String> {
+    let mut out = String::new();
+    for line in krc.lines() {
+        let line = line.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() {
+            continue;
+        }
+        // 元数据行：[ti:xxx] / [offset:0] —— 冒号形式，跳过
+        let Some(rest) = line.strip_prefix('[') else { continue };
+        let Some(close) = rest.find(']') else { continue };
+        let header = &rest[..close];
+        let (h0, h1) = match header.split_once(',') {
+            Some((a, b)) => (a.trim(), b.trim()),
+            None => continue, // 无逗号 = 元数据行
+        };
+        let Ok(line_start) = h0.parse::<u64>() else { continue };
+        let Ok(line_dur) = h1.parse::<u64>() else { continue };
+        let line_end = line_start + line_dur;
+        let body = &rest[close + 1..];
+
+        // 游标扫描：<s,d[,x]>text 段；元组在字前面
+        let mut words: Vec<(u64, u64, String)> = Vec::new();
+        let mut cursor = 0usize;
+        while let Some(lt) = body[cursor..].find('<') {
+            let lp = cursor + lt;
+            let Some(rp) = body[lp..].find('>') else { break };
+            let times: Vec<&str> = body[lp + 1..lp + rp].split(',').collect();
+            if times.len() < 2 {
+                break;
+            }
+            let (Ok(ws), Ok(wd)) = (times[0].trim().parse::<u64>(), times[1].trim().parse::<u64>())
+            else {
+                break;
+            };
+            // 字文本：到下一个 '<' 或行尾
+            let start = lp + rp + 1;
+            let end = body[start..].find('<').map(|p| start + p).unwrap_or(body.len());
+            let text = &body[start..end];
+            if !text.is_empty() {
+                words.push((ws, ws + wd, text.to_string()));
+            }
+            cursor = end;
+        }
+        if words.is_empty() {
+            continue;
+        }
+        let mut body = String::new();
+        for (ws, we, text) in words {
+            body.push_str(&format!(
+                "<{}>{}<{}>",
+                fmt_lrc_time(ws),
+                text,
+                fmt_lrc_time(we)
+            ));
+        }
+        let _ = line_end;
+        out.push_str(&format!("[{}]{body}\n", fmt_lrc_time(line_start)));
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
 /// 毫秒 → LRC 时间 mm:ss.cc（百分秒，yrc/QRC 原始精度 10ms）
 pub fn fmt_lrc_time(ms: u64) -> String {
     let csec = ms / 10;
@@ -261,5 +331,32 @@ mod tests {
         let p = parse("[offset:500]\n[00:01.00]<00:01.00>你");
         let ws = p.lines[0].words.as_ref().unwrap();
         assert_eq!(ws[0].start_ms, 1500);
+    }
+
+    #[test]
+    fn krc_to_enhanced() {
+        let krc = "[id:$00000000$]\n[ar:测试]\n[offset:0]\n[17662,2870]<17662,187,0>跟<17849,234,0>着<18083,234,0>希望<18317,234,0>去<18551,234,0>闯\n[21120,2930]<21120,210,0>只<21330,210,0>有";
+        let out = krc_to_enhanced_lrc(krc).expect("converted");
+        let p = parse(&out);
+        assert!(p.synced);
+        assert_eq!(p.lines.len(), 2);
+        let l0 = &p.lines[0];
+        // 增强-LRC 中间格式精度为 10ms（与 yrc/QRC 转换一致）
+        assert_eq!(l0.time_ms, Some(17660));
+        assert_eq!(l0.text, "跟着希望去闯");
+        let ws = l0.words.as_ref().expect("words");
+        // `<start>字<end>` 格式经 parse 会产出字与空字交替的词表（与 yrc/QRC 转换一致）
+        let real: Vec<_> = ws.iter().filter(|w| !w.text.is_empty()).collect();
+        assert_eq!(real.len(), 5);
+        assert_eq!(real[0].text, "跟");
+        assert_eq!(real[0].start_ms, 17660);
+        assert_eq!(real[2].text, "希望");
+        assert_eq!(real[2].start_ms, 18080);
+        assert_eq!(p.lines[1].text, "只有");
+    }
+
+    #[test]
+    fn krc_all_metadata_returns_none() {
+        assert!(krc_to_enhanced_lrc("[ti:歌]\n[ar:人]\n[offset:0]\n").is_none());
     }
 }

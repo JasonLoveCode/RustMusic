@@ -118,7 +118,7 @@ export interface QqSong {
 }
 
 export interface KgSong {
-  /** 歌曲 hash（酷狗唯一曲目标识） */
+  /** 歌曲 hash（酷狗唯一曲目标识，128k 档） */
   id: string;
   name: string;
   singer: string;
@@ -126,6 +126,30 @@ export interface KgSong {
   durationMs: number;
   cover: string;
   vip: boolean;
+  /** 专辑音频 ID / 专辑 ID：登录后按音质取链接用 */
+  albumAudioId?: number;
+  albumId?: number;
+  /** 高音质文件 hash（搜索/榜单通道附带） */
+  hqHash?: string;
+  sqHash?: string;
+  superHash?: string;
+}
+
+/** 酷狗官方榜单 */
+export interface KgToplist {
+  id: number;
+  name: string;
+  pic: string;
+}
+
+/** 酷狗公开歌单（global_collection_id） */
+export interface KgPublicPlaylist {
+  id: string;
+  name: string;
+  cover: string;
+  playCount: number;
+  creator: string;
+  songs: KgSong[];
 }
 
 /** B 站视频音频条目（rid = "BVxxx-cid"，与后端 qid/缓存键一致） */
@@ -280,10 +304,12 @@ export interface OnlineRecState {
   title: string;
   cover: string;
   subtitle: string;
-  /** 可整单收藏时：远程歌单 ID（netease 榜单/个性化歌单、QQ 公开歌单） */
-  playlistId?: number;
+  /** 可整单收藏时：远程歌单 ID（netease 榜单/个性化歌单、QQ 公开歌单、
+   *  酷狗 global_collection_id 字符串） */
+  playlistId?: number | string;
   netease?: NeteaseTrack[];
   qq?: QqSong[];
+  kugou?: KgSong[];
 }
 
 export type OnlineSource = "netease" | "qq" | "kugou";

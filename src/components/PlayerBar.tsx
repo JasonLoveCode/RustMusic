@@ -344,14 +344,11 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
       )}
 
       <div
-        className={`glass-sheen h-[64px] rounded-[18px] flex items-center pl-5 pr-6 gap-5 transition-opacity duration-300 ${
+        className={`h-[64px] rounded-[18px] flex items-center pl-5 pr-6 gap-5 transition-opacity duration-300 ${
           nowPlayingOpen ? "opacity-80 hover:opacity-100" : ""
         }`}
         style={{
           background: "var(--bar-glass)",
-          backdropFilter: "blur(var(--bar-blur, 16px))",
-          WebkitBackdropFilter: "blur(var(--bar-blur, 16px))",
-          border: "1px solid var(--bar-line)",
           boxShadow: "var(--bar-shadow)",
         }}
       >

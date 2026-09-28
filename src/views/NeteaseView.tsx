@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   Cloud,
   Heart,
-  Info,
   ListChecks,
   ListPlus,
   LogOut,
@@ -100,12 +99,16 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
   const neteaseNickname = useStore((s) => s.neteaseNickname);
   const qqLoggedIn = useStore((s) => s.qqLoggedIn);
   const qqNickname = useStore((s) => s.qqNickname);
+  const kugouLoggedIn = useStore((s) => s.kugouLoggedIn);
+  const kugouNickname = useStore((s) => s.kugouNickname);
   const neteaseLogout = useStore((s) => s.neteaseLogout);
   const qqLogout = useStore((s) => s.qqLogout);
+  const kugouLogout = useStore((s) => s.kugouLogout);
   const playlists = useStore((s) => s.playlists);
   const createPlaylist = useStore((s) => s.createPlaylist);
   const importNeteasePlaylist = useStore((s) => s.importNeteasePlaylist);
   const importQqPlaylist = useStore((s) => s.importQqPlaylist);
+  const importKugouPlaylist = useStore((s) => s.importKugouPlaylist);
   const importAllPlaylists = useStore((s) => s.importAllPlaylists);
   const openDetailPage = useStore((s) => s.openDetailPage);
   const toast = useStore((s) => s.toast);
@@ -137,7 +140,7 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
   const [newPlName, setNewPlName] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [importList, setImportList] = useState<
-    { id: number; name: string; trackCount: number }[] | null
+    { id: number | string; name: string; trackCount: number }[] | null
   >(null);
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{
@@ -158,19 +161,23 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
       : source === "qq"
         ? qqSearched
         : kugouSearched;
-  // 酷狗匿名可用，无需登录
+  // 酷狗搜索/播放匿名可用；登录用于 VIP 曲目按会员权益播放
   const loggedIn =
-    source === "netease" ? neteaseLoggedIn : source === "qq" ? qqLoggedIn : true;
+    source === "netease"
+      ? neteaseLoggedIn
+      : source === "qq"
+        ? qqLoggedIn
+        : kugouLoggedIn;
   const nickname =
     source === "netease"
       ? neteaseNickname
       : source === "qq"
         ? qqNickname
-        : "免费畅听";
+        : kugouNickname;
   const sourceName =
     source === "netease" ? "网易云" : source === "qq" ? "QQ 音乐" : "酷狗";
-  // 随机推荐 / 榜单目前只接了网易云与 QQ（匿名接口），酷狗无此能力
-  const recommendable = source === "netease" || source === "qq";
+  // 推荐入口（榜单/随便听听）三源都接了：酷狗为匿名接口
+  const recommendable = true;
 
   // 推荐接口预取：榜单 chip 数据量小、匿名可拉，进视图静默加载；
   // 失败只影响推荐入口，不打扰搜索主流程。
@@ -193,13 +200,23 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
                 cover: t.cover,
               }))
             );
-        } else {
+        } else if (source === "qq") {
           const r = await api.qqToplists();
           if (!dead)
             setToplists(
               (r.toplists ?? []).map((t) => ({
                 id: t.id,
                 name: t.title,
+                cover: t.pic,
+              }))
+            );
+        } else {
+          const r = await api.kugouToplists();
+          if (!dead)
+            setToplists(
+              (r.toplists ?? []).map((t) => ({
+                id: t.id,
+                name: t.name,
                 cover: t.pic,
               }))
             );
@@ -231,6 +248,13 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
           ...Object.fromEntries(r.qq!.map((t) => [t.id, t])),
         },
       }));
+    } else if (r.kugou) {
+      useStore.setState((s) => ({
+        kugouCache: {
+          ...s.kugouCache,
+          ...Object.fromEntries(r.kugou!.map((t) => [t.id, t])),
+        },
+      }));
     }
   };
 
@@ -250,7 +274,7 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
         };
         cacheRecSongs(next);
         setRec(next);
-      } else {
+      } else if (source === "qq") {
         const r = await api.qqRandomPlaylist();
         const next: OnlineRecState = {
           origin: "random",
@@ -259,6 +283,18 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
           subtitle: r.creator,
           playlistId: r.id,
           qq: r.songs,
+        };
+        cacheRecSongs(next);
+        setRec(next);
+      } else {
+        const r = await api.kugouRandomPlaylist();
+        const next: OnlineRecState = {
+          origin: "random",
+          title: r.name,
+          cover: r.cover,
+          subtitle: r.creator,
+          playlistId: r.id,
+          kugou: r.songs,
         };
         cacheRecSongs(next);
         setRec(next);
@@ -274,28 +310,41 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
     if (recLoading) return;
     setRecLoading(true);
     try {
-      const r =
-        source === "netease"
-          ? await api.neteaseToplistTracks(t.id)
-          : await api.qqToplistTracks(t.id);
       const next: OnlineRecState =
         source === "netease"
-          ? {
-              origin: "top",
-              title: t.name,
-              cover: t.cover,
-              subtitle: `${sourceName}官方榜单`,
-              // 网易云榜单 ID 即歌单 ID，可整单收藏
-              playlistId: t.id,
-              netease: r.songs as NeteaseTrack[],
-            }
-          : {
-              origin: "top",
-              title: t.name,
-              cover: t.cover,
-              subtitle: `${sourceName}官方榜单`,
-              qq: r.songs as QqSong[],
-            };
+          ? await (async () => {
+              const r = await api.neteaseToplistTracks(t.id);
+              return {
+                origin: "top" as const,
+                title: t.name,
+                cover: t.cover,
+                subtitle: `${sourceName}官方榜单`,
+                // 网易云榜单 ID 即歌单 ID，可整单收藏
+                playlistId: t.id,
+                netease: r.songs as NeteaseTrack[],
+              };
+            })()
+          : source === "qq"
+            ? await (async () => {
+                const r = await api.qqToplistTracks(t.id);
+                return {
+                  origin: "top" as const,
+                  title: t.name,
+                  cover: t.cover,
+                  subtitle: `${sourceName}官方榜单`,
+                  qq: r.songs as QqSong[],
+                };
+              })()
+            : await (async () => {
+                const r = await api.kugouToplistTracks(t.id);
+                return {
+                  origin: "top" as const,
+                  title: t.name,
+                  cover: t.cover,
+                  subtitle: `${sourceName}官方榜单`,
+                  kugou: r.songs,
+                };
+              })();
       cacheRecSongs(next);
       setRec(next);
     } catch (e) {
@@ -347,8 +396,9 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
   const saveRecPlaylist = async () => {
     if (!rec?.playlistId || recLoading) return;
     try {
-      if (source === "netease") await importNeteasePlaylist(rec.playlistId, rec.title);
-      else await importQqPlaylist(rec.playlistId, rec.title);
+      if (source === "netease") await importNeteasePlaylist(rec.playlistId as number, rec.title);
+      else if (source === "qq") await importQqPlaylist(rec.playlistId as number, rec.title);
+      else await importKugouPlaylist(String(rec.playlistId), rec.title);
     } catch (e) {
       toast(String(e), "error");
     }
@@ -382,6 +432,19 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
         mediaMid: t.mediaMid,
       }));
     }
+    if (rec?.kugou) {
+      return rec.kugou.map((t) => ({
+        kind: "kugou" as const,
+        id: t.id,
+        name: t.name,
+        artist: t.singer,
+        album: t.album,
+        cover: t.cover,
+        durationMs: t.durationMs,
+        vip: t.vip,
+        mediaMid: String(t.albumAudioId ?? ""),
+      }));
+    }
     if (source === "netease") {
       return neteaseResults.map((t: NeteaseTrack) => ({
         kind: "netease" as const,
@@ -405,7 +468,8 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
         cover: t.cover,
         durationMs: t.durationMs,
         vip: t.vip,
-        mediaMid: "",
+        // mediaMid 通道复用：存专辑音频 ID，收藏/下载/恢复播放都要用
+        mediaMid: String(t.albumAudioId ?? ""),
       }));
     }
     return qqResults.map((t: QqSong) => ({
@@ -493,6 +557,7 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
       // 推荐态：队列 = 当前推荐列表（曲目信息已在加载时写入缓存）
       if (rec.netease) playNetease(rec.netease, i);
       else if (rec.qq) playQq(rec.qq, i);
+      else if (rec.kugou) playKugou(rec.kugou, i);
       return;
     }
     if (source === "netease") playNetease(neteaseResults, i);
@@ -647,18 +712,9 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
             </button>
           </div>
 
-          {/* 登录状态（酷狗免登录） */}
+          {/* 登录状态（酷狗扫码登录用于 VIP 曲目按权益播放） */}
           <div className="shrink-0 flex flex-col items-end gap-2 mb-1">
-            {source === "kugou" ? (
-              <span
-                className="chip text-[var(--ink-2)]"
-                style={{ background: "var(--shade)" }}
-                title="酷狗暂不支持登录：免费曲目可直接播放，标有 VIP 的曲目暂时无法播放"
-              >
-                <Info size={13} />
-                登录暂未支持 · 仅非 VIP 曲目可播
-              </span>
-            ) : loggedIn ? (
+            {loggedIn ? (
               <>
                 <span
                   className="chip text-[var(--accent-strong)]"
@@ -678,7 +734,9 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
                         const list =
                           source === "netease"
                             ? await api.neteaseUserPlaylists()
-                            : await api.qqUserPlaylists();
+                            : source === "qq"
+                              ? await api.qqUserPlaylists()
+                              : await api.kugouUserPlaylists();
                         setImportList(list);
                       } catch (e) {
                         setImportOpen(false);
@@ -690,7 +748,13 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
                   </button>
                   <button
                     className="btn-secondary !py-1.5 !px-3"
-                    onClick={() => (source === "netease" ? neteaseLogout() : qqLogout())}
+                    onClick={() =>
+                      source === "netease"
+                        ? neteaseLogout()
+                        : source === "qq"
+                          ? qqLogout()
+                          : kugouLogout()
+                    }
                   >
                     退出
                   </button>
@@ -1366,12 +1430,7 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
                     setImporting(true);
                     // 逐个导入，弹窗内实时显示进度；结束后由 store 统一
                     // 刷新列表并汇总提示（含失败个数）
-                    // 酷狗无登录态、导入入口不渲染，这里只会是 netease/qq
-                    await importAllPlaylists(
-                      source === "kugou" ? "netease" : source,
-                      importList,
-                      setImportProgress
-                    );
+                    await importAllPlaylists(source, importList, setImportProgress);
                     setImporting(false);
                     setImportProgress(null);
                     setImportOpen(false);
@@ -1408,8 +1467,9 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
                   className="h-10 px-3 rounded-lg text-left text-[13px] text-[var(--ink)] hover:bg-[var(--shade)] flex items-center justify-between transition-colors disabled:opacity-50"
                   onClick={async () => {
                     setImporting(true);
-                    if (source === "netease") await importNeteasePlaylist(p.id, p.name);
-                    else await importQqPlaylist(p.id, p.name);
+                    if (source === "netease") await importNeteasePlaylist(p.id as number, p.name);
+                    else if (source === "qq") await importQqPlaylist(p.id as number, p.name);
+                    else await importKugouPlaylist(String(p.id), p.name);
                     setImporting(false);
                     setImportOpen(false);
                   }}
@@ -1452,6 +1512,7 @@ function QrLoginModal({
   const [errMsg, setErrMsg] = useState("");
   const neteaseSetLogin = useStore((s) => s.neteaseSetLogin);
   const qqSetLogin = useStore((s) => s.qqSetLogin);
+  const kugouSetLogin = useStore((s) => s.kugouSetLogin);
   const toast = useStore((s) => s.toast);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1468,7 +1529,9 @@ function QrLoginModal({
         const c =
           src === "netease"
             ? await api.neteaseQrCheck(identifier)
-            : await api.qqQrCheck(identifier);
+            : src === "qq"
+              ? await api.qqQrCheck(identifier)
+              : await api.kugouQrCheck(identifier);
         if (c.status === "waiting") return;
         if (c.status === "scanned") {
           setStatus("scanned");
@@ -1484,8 +1547,10 @@ function QrLoginModal({
           if (src === "netease") {
             neteaseSetLogin(true, c.nickname ?? "");
             useStore.getState().neteaseSyncLikes();
-          } else {
+          } else if (src === "qq") {
             qqSetLogin(true, c.nickname ?? "");
+          } else {
+            kugouSetLogin(true, c.nickname ?? "");
           }
           toast(`登录成功：${c.nickname ?? ""}`, "success");
           onClose();
@@ -1509,11 +1574,17 @@ function QrLoginModal({
         setQr(r.qr);
         setStatus("waiting");
         startPolling("netease", r.key);
-      } else {
+      } else if (source === "qq") {
         const r = await api.qqQrCreate();
         setQr(r.qr);
         setStatus("waiting");
         startPolling("qq", r.qrsig);
+      } else {
+        const r = await api.kugouQrCreate();
+        if (!r.qr) throw new Error("二维码图片获取失败，请重试");
+        setQr(r.qr);
+        setStatus("waiting");
+        startPolling("kugou", r.key);
       }
     } catch (e) {
       setStatus("error");
@@ -1532,7 +1603,10 @@ function QrLoginModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const sourceName = source === "qq" ? "QQ 音乐" : "网易云";
+  const sourceName =
+    source === "qq" ? "QQ 音乐" : source === "kugou" ? "酷狗音乐" : "网易云";
+  const appName =
+    source === "qq" ? "QQ" : source === "kugou" ? "酷狗" : "网易云";
 
   return (
     <Modal open={open} onClose={onClose} title={`扫码登录${sourceName}`} width={360}>
@@ -1557,7 +1631,7 @@ function QrLoginModal({
           {status === "loading"
             ? "正在生成二维码…"
             : status === "waiting"
-              ? `打开${sourceName === "QQ 音乐" ? "QQ" : "网易云"} App 扫一扫`
+              ? `打开${appName} App 扫一扫`
               : status === "scanned"
                 ? "已在手机上确认，请在手机上点击登录"
                 : status === "expired"

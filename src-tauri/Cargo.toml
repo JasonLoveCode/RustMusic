@@ -42,7 +42,7 @@ filetime = "0.2"
 [target.'cfg(windows)'.dependencies]
 # WebView2 TrySuspend：托盘隐藏时挂起渲染进程回收内存
 webview2-com = "0.38"
-windows = "0.61"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm"] }
 
 [dev-dependencies]
 

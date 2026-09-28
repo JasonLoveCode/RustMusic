@@ -20,9 +20,7 @@ export default function SkinPicker({
       <button
         key={key}
         onClick={() => setSkin(key)}
-        className={`relative aspect-video rounded-xl overflow-hidden text-left transition-all duration-200 hover:scale-[1.03] hover:shadow-lg ${
-          selected ? "ring-2 ring-[var(--accent)]" : "ring-1 ring-[var(--line)]"
-        }`}
+        className="relative aspect-video rounded-xl overflow-hidden text-left transition-all duration-200 hover:scale-[1.03] hover:shadow-lg"
         style={bg}
         title={desc}
       >

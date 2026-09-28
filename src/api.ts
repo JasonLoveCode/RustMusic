@@ -137,8 +137,35 @@ export const api = {
     cover: string;
     durationMs: number;
     vip: boolean;
+    albumAudioId?: number;
+    albumId?: number;
+    hqHash?: string;
+    sqHash?: string;
+    superHash?: string;
   }) => invoke<void>("kugou_play", { track }),
   kugouLyric: (hash: string) => invoke<LyricsPayload>("kugou_lyric", { hash }),
+  kugouQrCreate: () => invoke<{ key: string; qr: string }>("kugou_qr_create"),
+  kugouQrCheck: (key: string) =>
+    invoke<{ status: string; nickname?: string }>("kugou_qr_check", { key }),
+  kugouStatus: () => invoke<{ loggedIn: boolean; nickname: string }>("kugou_status"),
+  kugouLogout: () => invoke<void>("kugou_logout"),
+  kugouToplists: () =>
+    invoke<{ toplists: import("./types").KgToplist[] }>("kugou_toplists"),
+  kugouToplistTracks: (topId: number, page?: number) =>
+    invoke<{ songs: import("./types").KgSong[] }>("kugou_toplist_tracks", {
+      topId,
+      page: page ?? 1,
+    }),
+  kugouRandomPlaylist: () =>
+    invoke<import("./types").KgPublicPlaylist>("kugou_random_playlist"),
+  kugouPlaylistTracks: (id: string) =>
+    invoke<import("./types").KgPublicPlaylist>("kugou_playlist_tracks", { id }),
+  kugouUserPlaylists: () =>
+    invoke<{ id: string; name: string; trackCount: number }[]>(
+      "kugou_user_playlists"
+    ),
+  kugouImportPlaylist: (remotePid: string, name: string) =>
+    invoke<[number, number]>("kugou_import_playlist", { remotePid, name }),
   qqQrCreate: () => invoke<{ qrsig: string; qr: string }>("qq_qr_create"),
   qqQrCheck: (qrsig: string) =>
     invoke<{ status: string; nickname?: string }>("qq_qr_check", { qrsig }),

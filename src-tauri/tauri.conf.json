@@ -24,20 +24,26 @@
         "transparent": false,
         "resizable": true,
         "dragDropEnabled": true,
-        "backgroundColor": "#0b0b10"
+        "backgroundColor": "#0b0b10",
+        "shadow": false
       }
     ],
     "security": {
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/**"]
+        "scope": [
+          "$APPDATA/**"
+        ]
       }
     }
   },
   "bundle": {
     "active": true,
     "targets": [],
-    "icon": ["icons/icon.ico", "icons/icon.png"]
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ]
   }
 }
