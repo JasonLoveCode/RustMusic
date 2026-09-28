@@ -105,6 +105,7 @@ export default function SkinPicker({
 
   return (
     <Modal open={open} onClose={onClose} title="皮肤" width={720}>
+      <div className="skin-picker-fixed">
       <div className="grid grid-cols-3 gap-3 max-h-[54vh] overflow-y-auto pr-1">
         {card(
           DEFAULT_SKIN,
@@ -256,6 +257,7 @@ export default function SkinPicker({
       )}
       <div className="text-[10.5px] text-[var(--ink-3)] mt-3 leading-relaxed">
         皮肤替换主界面背景，与浅色/暗色主题、强调色自由组合；播放时封面主色会为壁纸添上一层随音乐呼吸的微光。
+      </div>
       </div>
     </Modal>
   );

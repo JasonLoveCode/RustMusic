@@ -598,7 +598,6 @@ const CUSTOM_LIST_KEY = "rustmusic_custom_skins";
 export type CustomFill = "cover" | "contain" | "stretch" | "tile";
 
 export interface CustomSkinSettings {
-  img: string;
   fill: CustomFill;
   /** 透明度 0-100：100 = 原图最清晰（纱最轻） */
   scrim: number;
@@ -608,15 +607,14 @@ export interface CustomSkinSettings {
 
 export function loadCustomSkinSettings(): CustomSkinSettings {
   return {
-    img: localStorage.getItem(CUSTOM_IMG_KEY) ?? "",
     fill: (localStorage.getItem(CUSTOM_FILL_KEY) as CustomFill) || "cover",
     scrim: Number(localStorage.getItem(CUSTOM_SCRIM_KEY) ?? "55"),
     text: (localStorage.getItem(CUSTOM_TEXT_KEY) as "auto" | "light" | "dark") || "auto",
   };
 }
 
+/** 保存设置（不含激活图片——激活图片走 setActiveCustomImage，避免互相覆盖） */
 export function saveCustomSkinSettings(s: CustomSkinSettings) {
-  localStorage.setItem(CUSTOM_IMG_KEY, s.img);
   localStorage.setItem(CUSTOM_FILL_KEY, s.fill);
   localStorage.setItem(CUSTOM_SCRIM_KEY, String(s.scrim));
   localStorage.setItem(CUSTOM_TEXT_KEY, s.text);
@@ -632,7 +630,7 @@ const FILL_CSS: Record<CustomFill, [string, string]> = {
 /** 应用自定义皮肤的填充/纱强度/文字色系（改设置后即时调用） */
 export function applyCustomSkinVars() {
   const s = loadCustomSkinSettings();
-  if (!s.img) return;
+  if (!activeCustomImage()) return;
   const root = document.documentElement.style;
   const [size, repeat] = FILL_CSS[s.fill] ?? FILL_CSS.cover;
   root.setProperty("--skin-fill", size);
@@ -656,11 +654,11 @@ export function applyCustomSkinVars() {
 
 /** 自动文字色系：采样图片平均亮度，亮图配深字、暗图配浅字 */
 export async function applyCustomAutoText() {
-  const s = loadCustomSkinSettings();
-  if (!s.img) return;
+  const imgPath = activeCustomImage();
+  if (!imgPath) return;
   try {
     const img = new Image();
-    img.src = convertFileSrc(s.img);
+    img.src = convertFileSrc(imgPath);
     await img.decode();
     const c = document.createElement("canvas");
     c.width = 32;

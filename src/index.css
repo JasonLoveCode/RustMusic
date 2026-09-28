@@ -25,6 +25,10 @@
   --vignette: rgba(5, 3, 2, 0.55);
   --backdrop-1: #241a10;
   --backdrop-2: #14100b;
+  /* 主题固定文字色（皮肤设置弹窗等需要"不随皮肤变化"的界面用） */
+  --ink-t: #f3ede3;
+  --ink-2-t: #b3a897;
+  --ink-3-t: #7d7365;
   /* 播放页歌词未唱行的暗色默认：--ink-3 在氛围渐变上太暗（无皮肤时生效；
      皮肤启用时未定义此变量，跟随各皮肤适配后的 --ink-3） */
   --lyric-dim: rgba(243, 237, 227, 0.62);
@@ -75,6 +79,9 @@ html[data-theme="light"] {
   --vignette: rgba(154, 170, 193, 0.2);
   --backdrop-1: #e7ecf4;
   --backdrop-2: #eef1f7;
+  --ink-t: #2b3546;
+  --ink-2-t: #5d6a7e;
+  --ink-3-t: #8d99ab;
   --bar-tint: rgba(238, 241, 247, 0.88);
   --bar-glass: rgba(43, 53, 70, 0.07);
   --bar-line: rgba(43, 53, 70, 0.12);
@@ -402,6 +409,14 @@ html[data-theme="light"][data-skin-key="sunset"] {
 html[data-theme="light"][data-skin-key="wheat"] {
   --ink-2: rgba(40, 38, 28, 0.85);
   --ink-3: rgba(40, 38, 28, 0.66);
+}
+
+/* 皮肤设置弹窗：文字色固定跟随主题（浅色=黑字/深色=白字），
+   不受逐皮肤文字适配与自定义文字色系影响 */
+.skin-picker-fixed {
+  --ink: var(--ink-t);
+  --ink-2: var(--ink-2-t);
+  --ink-3: var(--ink-3-t);
 }
 
 /* ---------- 自定义图片皮肤：文字色系（浅色文字/深色文字/自动采样） ---------- */
