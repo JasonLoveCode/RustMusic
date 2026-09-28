@@ -156,6 +156,13 @@ export interface BiliCollection {
   total: number;
 }
 
+/** 收藏的 UP 主（localStorage 持久化，在线音源页横排展示） */
+export interface BiliFollow {
+  mid: string;
+  name: string;
+  face: string;
+}
+
 /** 在线音源页“当前结果”（存 store：切页返回不丢） */
 export type SourcesResult =
   | { type: "video"; rows: BiliSpaceItem[] }

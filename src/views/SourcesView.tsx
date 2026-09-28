@@ -1,16 +1,25 @@
-import { useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   Calendar,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Download,
   Heart,
   Link2,
   ListMusic,
   Play,
   Plus,
-  Radio,
+  Server,
   Square,
+  Star,
   Trash2,
   Tv,
   Users,
@@ -20,7 +29,7 @@ import { useStore } from "../store";
 import Modal from "../components/Modal";
 import CoverImg from "../components/CoverImg";
 import { fmtDate, fmtTime } from "../utils";
-import type { BiliCollection, BiliSpaceItem, SourcesResult } from "../types";
+import type { BiliCollection, BiliFollow, BiliSpaceItem, SourcesResult } from "../types";
 
 const ORDERS: { key: "pubdate" | "click" | "stow"; label: string }[] = [
   { key: "pubdate", label: "最新发布" },
@@ -28,10 +37,299 @@ const ORDERS: { key: "pubdate" | "click" | "stow"; label: string }[] = [
   { key: "stow", label: "最多收藏" },
 ];
 
+type SourceTab = "bilibili" | "navidrome" | "other";
+
+const TABS: { key: SourceTab; label: string }[] = [
+  { key: "bilibili", label: "Bilibili" },
+  { key: "navidrome", label: "Navidrome" },
+  { key: "other", label: "其它" },
+];
+
 function fmtPlay(n: number): string {
   if (n >= 10000_0000) return `${(n / 10000_0000).toFixed(1)}亿`;
   if (n >= 10000) return `${(n / 10000).toFixed(1)}万`;
   return String(n);
+}
+
+/** 收藏 UP 主横排：一行头像（下方名字），最右一对箭头按钮横向滚动；
+ *  支持按住头像左右拖动排序（mouse 事件实现：Tauri 窗口的原生文件拖放
+ *  拦截会吃掉页面内 HTML5 拖放事件，与曲库手动排序 useDragList 同思路；
+ *  拖动中被拖头像跟随指针、其余头像实时让位，松手滑入槽位后提交） */
+function UpFollowRow({
+  follows,
+  activeMid,
+  busy,
+  onOpen,
+  onRemove,
+  onReorder,
+}: {
+  follows: BiliFollow[];
+  activeMid: string | null;
+  busy?: boolean;
+  onOpen: (f: BiliFollow) => void;
+  onRemove: (f: BiliFollow) => void;
+  onReorder: (from: number, to: number) => void;
+}) {
+  const scRef = useRef<HTMLDivElement | null>(null);
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+  /** 拖拽状态：from = 起始下标；to = 落点（移除源后的最终下标）；
+   *  dx = 被拖头像的指针位移；settle = 松手后滑入槽位的动画阶段 */
+  const [drag, setDrag] = useState<
+    { from: number; to: number; dx: number; pitch: number; settle?: boolean } | null
+  >(null);
+  const dragRef = useRef(drag);
+  dragRef.current = drag;
+  /** 拖拽会话：mousedown 时记录布局参数，移动超阈值才转正为拖拽（区分点击） */
+  const sessionRef = useRef<{
+    index: number;
+    rect0: number;
+    pitch: number;
+    count: number;
+    scroll0: number;
+    startX: number;
+  } | null>(null);
+  const activeRef = useRef(false);
+  /** 拖拽结束时刻：短窗口内吞掉 click，防止松手误开空间 */
+  const dragEndAt = useRef(-1e9);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const onItemMouseDown = (e: ReactMouseEvent<HTMLDivElement>, i: number) => {
+    if (e.button !== 0) return;
+    const el = scRef.current;
+    if (!el || follows.length < 2) return;
+    const kids = Array.from(el.children) as HTMLElement[];
+    if (kids.length < 2) return;
+    // 实测格距（头像等宽 + gap），不用写死
+    const pitch = kids[1].offsetLeft - kids[0].offsetLeft;
+    if (pitch <= 0) return;
+    sessionRef.current = {
+      index: i,
+      rect0: kids[0].offsetLeft,
+      pitch,
+      count: kids.length,
+      scroll0: el.scrollLeft,
+      startX: e.clientX,
+    };
+  };
+
+  // 拖拽生命周期挂在 window 上（按下在行内、移动/松手可能离开行）
+  useEffect(() => {
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+    const onMove = (e: MouseEvent) => {
+      const p = sessionRef.current;
+      if (!p) return;
+      let d = dragRef.current;
+      if (!activeRef.current) {
+        // 未超过位移阈值前不算拖拽：普通点击打开空间不受影响
+        if (Math.abs(e.clientX - p.startX) < 6) return;
+        activeRef.current = true;
+        document.body.classList.add("dragging-ups");
+        d = { from: p.index, to: p.index, dx: 0, pitch: p.pitch };
+        dragRef.current = d;
+        setDrag(d);
+      }
+      e.preventDefault();
+      const el = scRef.current;
+      if (!el || !d) return;
+      // 被拖头像 1:1 跟随指针（限制在横排范围内）；容器滚动时补偿位移
+      const dx = clamp(
+        e.clientX - p.startX + (el.scrollLeft - p.scroll0),
+        -p.index * p.pitch,
+        (p.count - 1 - p.index) * p.pitch
+      );
+      // 落点 = 头像中心所在槽位（即移除源后的最终下标，无需再折算）
+      const center = p.rect0 + p.index * p.pitch + p.pitch / 2 + dx;
+      const to = clamp(
+        Math.round((center - p.rect0 - p.pitch / 2) / p.pitch),
+        0,
+        p.count - 1
+      );
+      if (to !== d.to || dx !== d.dx) {
+        const next = { ...d, to, dx };
+        dragRef.current = next;
+        setDrag(next);
+      }
+    };
+
+    /** 松手提交 / ESC 或失焦取消（不提交，视觉复位） */
+    const finish = (commit: boolean) => {
+      sessionRef.current = null;
+      if (!activeRef.current) return;
+      activeRef.current = false;
+      document.body.classList.remove("dragging-ups");
+      dragEndAt.current = performance.now();
+      const d = dragRef.current;
+      if (!d) return;
+      if (commit && d.to !== d.from) {
+        // 两段式：先滑入目标槽位，落定同一帧清样式并提交——
+        // 提交触发的重渲染里新顺序的自然位置与动画终点一致，无跳变
+        const settled = { ...d, dx: (d.to - d.from) * d.pitch, settle: true };
+        dragRef.current = settled;
+        setDrag(settled);
+        settleTimer.current = setTimeout(() => {
+          settleTimer.current = null;
+          dragRef.current = null;
+          setDrag(null);
+          reorderRef.current(d.from, d.to);
+        }, 150);
+      } else {
+        dragRef.current = null;
+        setDrag(null);
+      }
+    };
+
+    const onUp = () => finish(true);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") finish(false);
+    };
+    const onBlur = () => finish(false);
+    const onQuiet = (e: MouseEvent) => {
+      if (performance.now() - dragEndAt.current < 350) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("click", onQuiet, true);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("click", onQuiet, true);
+      if (settleTimer.current) clearTimeout(settleTimer.current);
+      document.body.classList.remove("dragging-ups");
+      sessionRef.current = null;
+      activeRef.current = false;
+    };
+  }, []);
+
+  // onReorder 经 ref 转发进 window 级监听，回调变化不重挂监听
+  const reorderRef = useRef(onReorder);
+  reorderRef.current = onReorder;
+
+  const updateArrows = () => {
+    const el = scRef.current;
+    if (!el) return;
+    setCanLeft(el.scrollLeft > 2);
+    setCanRight(el.scrollLeft + el.clientWidth < el.scrollWidth - 2);
+  };
+
+  // 数量变化后重算箭头可用态（首增/清空时滚动条出现或消失）
+  useEffect(updateArrows, [follows.length]);
+
+  const scroll = (dir: 1 | -1) => {
+    const el = scRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(240, el.clientWidth * 0.8), behavior: "smooth" });
+  };
+
+  return (
+    <div className="flex items-center gap-2 mt-2">
+      <div
+        ref={scRef}
+        className="flex-1 min-w-0 flex items-center gap-1 overflow-x-hidden py-1"
+        onScroll={updateArrows}
+      >
+        {!follows.length && (
+          <span className="text-[11.5px] text-[var(--ink-3)] px-1 leading-relaxed">
+            暂无收藏的 UP 主：解析 UP 主空间后点「收藏UP主」，会显示在这里
+          </span>
+        )}
+        {follows.map((f, i) => {
+          const active = activeMid === f.mid;
+          // 拖拽中：from→to 之间的头像让位平移一格（实时预览落点）
+          let shift = 0;
+          if (drag) {
+            if (drag.to > drag.from && i > drag.from && i <= drag.to) shift = -drag.pitch;
+            else if (drag.to < drag.from && i >= drag.to && i < drag.from) shift = drag.pitch;
+          }
+          const dragged = drag?.from === i;
+          return (
+            <div
+              key={f.mid}
+              onMouseDown={(e) => onItemMouseDown(e, i)}
+              className="relative group shrink-0 select-none"
+              style={{
+                transform: dragged
+                  ? `translateX(${drag ? drag.dx : 0}px)`
+                  : shift
+                    ? `translateX(${shift}px)`
+                    : undefined,
+                transition:
+                  dragged && !drag?.settle
+                    ? undefined
+                    : drag
+                      ? "transform 150ms ease"
+                      : undefined,
+                opacity: dragged ? 0.45 : undefined,
+                zIndex: dragged ? 1 : undefined,
+              }}
+            >
+              <button
+                className={`flex flex-col items-center gap-1 w-[68px] py-1 rounded-lg transition-colors ${
+                  active ? "bg-[#fb7299]/10" : "hover:bg-[var(--shade)]"
+                }`}
+                disabled={busy}
+                onClick={() => onOpen(f)}
+                title={`打开「${f.name}」的投稿空间`}
+              >
+                <CoverImg
+                  src={f.face}
+                  seed={f.name}
+                  className={`w-10 h-10 rounded-full shrink-0 ${
+                    active ? "ring-2 ring-[#fb7299]" : ""
+                  }`}
+                  iconSize={16}
+                />
+                <span
+                  className={`w-full px-1 text-[10.5px] leading-tight truncate text-center ${
+                    active ? "text-[#fb7299] font-semibold" : "text-[var(--ink-2)]"
+                  }`}
+                >
+                  {f.name}
+                </span>
+              </button>
+              <button
+                className="absolute top-0 right-0.5 w-4 h-4 rounded-full bg-black/55 text-white hidden group-hover:flex items-center justify-center hover:bg-black/80 transition-colors"
+                title="取消收藏"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(f);
+                }}
+              >
+                <X size={9} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        <button
+          className="w-7 h-7 rounded-full flex items-center justify-center text-[var(--ink-2)] hover:bg-[var(--shade)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+          disabled={!canLeft}
+          onClick={() => scroll(-1)}
+          title="向左滚动"
+        >
+          <ChevronLeft size={15} />
+        </button>
+        <button
+          className="w-7 h-7 rounded-full flex items-center justify-center text-[var(--ink-2)] hover:bg-[var(--shade)] disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+          disabled={!canRight}
+          onClick={() => scroll(1)}
+          title="向右滚动"
+        >
+          <ChevronRight size={15} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 export default function SourcesView() {
@@ -53,6 +351,11 @@ export default function SourcesView() {
   const biliLogout = useStore((s) => s.biliLogout);
   const result = useStore((s) => s.sourcesResult);
   const setResult = useStore((s) => s.setSourcesResult);
+  const tab = useStore((s) => s.sourcesTab);
+  const setTab = useStore((s) => s.setSourcesTab);
+  const biliFollows = useStore((s) => s.biliFollows);
+  const biliToggleFollow = useStore((s) => s.biliToggleFollow);
+  const biliReorderFollows = useStore((s) => s.biliReorderFollows);
 
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -121,28 +424,33 @@ export default function SourcesView() {
     setSelKeys(new Set());
   };
 
+  /** 解析 UP 主空间（输入可为 space 链接或纯 UID），写入结果区 */
+  const openSpace = async (input: string) => {
+    const r = await useStore.getState().biliSpace(input, "pubdate");
+    replaceResult({
+      type: "space",
+      mid: r.mid,
+      name: r.name,
+      face: r.face,
+      fans: r.fans,
+      total: r.total,
+      order: "pubdate",
+      rows: r.items,
+      pn: 1,
+      hasMore: r.hasMore,
+      loadingMore: false,
+      collections: r.collections,
+      activeCollection: null,
+    });
+  };
+
   const submitBili = async () => {
     const input = bili.trim();
     if (!input || biliBusy) return;
     setBiliBusy(true);
     try {
       if (/space\.bilibili\.com\/\d+/.test(input) || /^\d+$/.test(input)) {
-        const r = await useStore.getState().biliSpace(input, "pubdate");
-        replaceResult({
-          type: "space",
-          mid: r.mid,
-          name: r.name,
-          face: r.face,
-          fans: r.fans,
-          total: r.total,
-          order: "pubdate",
-          rows: r.items,
-          pn: 1,
-          hasMore: r.hasMore,
-          loadingMore: false,
-          collections: r.collections,
-          activeCollection: null,
-        });
+        await openSpace(input);
       } else {
         const rows = await useStore.getState().biliVideoInfo(input);
         if (!rows.length) throw new Error("未解析到视频");
@@ -154,6 +462,15 @@ export default function SourcesView() {
       setBiliBusy(false);
       setBili("");
     }
+  };
+
+  /** 点击收藏的 UP 主：直接打开其空间（搜索框置为空，走 UID 解析） */
+  const openFollowed = (f: BiliFollow) => {
+    if (biliBusy) return;
+    setBiliBusy(true);
+    openSpace(f.mid)
+      .catch((e) => useStore.getState().toast(String(e), "error"))
+      .finally(() => setBiliBusy(false));
   };
 
   const changeOrder = async (order: "pubdate" | "click" | "stow") => {
@@ -486,106 +803,138 @@ export default function SourcesView() {
   };
 
   const space = result && result.type === "space" ? result : null;
+  const spaceFollowed = space ? biliFollows.some((f) => f.mid === space.mid) : false;
   const listRows = selMode ? visibleRows : [];
+
+  /** 当前页签下结果区显示的结果（页签与结果类型不匹配时显示空态；切回页签即还原） */
+  const tabResult =
+    result &&
+    ((tab === "bilibili" && (result.type === "video" || result.type === "space")) ||
+      (tab === "other" && result.type === "direct"))
+      ? result
+      : null;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col pb-[84px]">
       <header className="pt-5 pb-3 px-5">
-        <h1 className="text-[22px] font-bold flex items-center gap-2.5">
-          <Radio size={20} className="text-[var(--accent)]" />
-          在线音源
-        </h1>
-        <p className="text-[12.5px] text-[var(--ink-2)] mt-1.5 leading-relaxed">
-          粘贴 B 站视频（链接 / BV / av / 短链）或 UP 主空间（space.bilibili.com/UID）解析音频，
-          也可添加音频文件直链。仅显示当前结果。请仅添加你有权使用的音源。
-        </p>
-
-        <div className="flex gap-2 mt-3.5">
-          <div className="relative flex-1 max-w-[480px]">
-            <Tv
-              size={14}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-[#fb7299]"
-            />
-            <input
-              type="text"
-              value={bili}
-              onChange={(e) => setBili(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && bili.trim() && !biliBusy) submitBili();
-              }}
-              placeholder="B站视频链接 / BV号，或 UP 主空间链接 / UID"
-              className="w-full h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] pl-8 pr-3 text-[12.5px] focus:border-[var(--line)] transition-colors"
-            />
-          </div>
-          <button
-            className="btn-primary"
-            disabled={!bili.trim() || biliBusy}
-            style={{ opacity: bili.trim() && !biliBusy ? 1 : 0.45 }}
-            onClick={submitBili}
-          >
-            <Tv size={14} />
-            解析
-          </button>
-          <button
-            className="btn-secondary h-9 px-3 text-[12px] shrink-0 flex items-center gap-1.5"
-            onClick={() => (biliLoggedIn ? undefined : startBiliLogin())}
-            title={biliLoggedIn ? "" : "登录 B 站后可显示视频字幕（作歌词）、按收藏排序"}
-          >
-            <Tv size={13} className={biliLoggedIn ? "text-[#fb7299]" : ""} />
-            {biliLoggedIn ? biliNickname || "已登录" : "B站登录"}
-          </button>
-          {biliLoggedIn && (
+        {/* 音源页签 */}
+        <div className="flex items-center gap-1.5">
+          {TABS.map((t) => (
             <button
-              className="btn-ghost h-9 px-2 text-[12px] shrink-0 text-[var(--ink-2)]"
-              onClick={() => biliLogout()}
-              title="退出 B 站登录"
+              key={t.key}
+              className={`h-8 px-4 rounded-full text-[12.5px] transition-colors ${
+                tab === t.key
+                  ? "bg-[var(--accent-weak)] text-[var(--accent-strong)] font-semibold"
+                  : "text-[var(--ink-2)] hover:bg-[var(--shade)]"
+              }`}
+              onClick={() => setTab(t.key)}
             >
-              退出
+              {t.label}
             </button>
-          )}
+          ))}
         </div>
 
-        <div className="flex gap-2 mt-2">
-          <div className="relative flex-1 max-w-[480px]">
-            <Link2
-              size={14}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-2)]"
+        {tab === "bilibili" && (
+          <>
+            <div className="flex gap-2 mt-3">
+              <div className="relative flex-1 max-w-[480px]">
+                <Tv
+                  size={14}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-[#fb7299]"
+                />
+                <input
+                  type="text"
+                  value={bili}
+                  onChange={(e) => setBili(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && bili.trim() && !biliBusy) submitBili();
+                  }}
+                  placeholder="B站视频链接 / BV号，或 UP 主空间链接 / UID"
+                  className="w-full h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] pl-8 pr-3 text-[12.5px] focus:border-[var(--line)] transition-colors"
+                />
+              </div>
+              <button
+                className="btn-primary"
+                disabled={!bili.trim() || biliBusy}
+                style={{ opacity: bili.trim() && !biliBusy ? 1 : 0.45 }}
+                onClick={submitBili}
+              >
+                <Tv size={14} />
+                解析
+              </button>
+              <button
+                className="btn-secondary h-9 px-3 text-[12px] shrink-0 flex items-center gap-1.5"
+                onClick={() => (biliLoggedIn ? undefined : startBiliLogin())}
+                title={biliLoggedIn ? "" : "登录 B 站后可显示视频字幕（作歌词）、按收藏排序"}
+              >
+                <Tv size={13} className={biliLoggedIn ? "text-[#fb7299]" : ""} />
+                {biliLoggedIn ? biliNickname || "已登录" : "B站登录"}
+              </button>
+              {biliLoggedIn && (
+                <button
+                  className="btn-ghost h-9 px-2 text-[12px] shrink-0 text-[var(--ink-2)]"
+                  onClick={() => biliLogout()}
+                  title="退出 B 站登录"
+                >
+                  退出
+                </button>
+              )}
+            </div>
+            {/* 收藏的 UP 主：头像+名字一行，右侧箭头滚动 */}
+            <UpFollowRow
+              follows={biliFollows}
+              activeMid={space?.mid ?? null}
+              busy={biliBusy}
+              onOpen={openFollowed}
+              onRemove={biliToggleFollow}
+              onReorder={biliReorderFollows}
             />
+          </>
+        )}
+
+        {tab === "other" && (
+          <div className="flex gap-2 mt-3">
+            <div className="relative flex-1 max-w-[480px]">
+              <Link2
+                size={14}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--ink-2)]"
+              />
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canAdd) submitDirect();
+                }}
+                placeholder="https://example.com/song.mp3（添加后立即播放）"
+                className="w-full h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] pl-8 pr-3 text-[12.5px] focus:border-[var(--line)] transition-colors"
+              />
+            </div>
             <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && canAdd) submitDirect();
               }}
-              placeholder="https://example.com/song.mp3（添加后立即播放）"
-              className="w-full h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] pl-8 pr-3 text-[12.5px] focus:border-[var(--line)] transition-colors"
+              placeholder="名称（可选）"
+              className="w-[160px] h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] px-3 text-[12.5px] focus:border-[var(--line)] transition-colors"
             />
+            <button
+              className="btn-primary"
+              disabled={!canAdd}
+              style={{ opacity: canAdd ? 1 : 0.45 }}
+              onClick={submitDirect}
+            >
+              <Plus size={14} />
+              添加
+            </button>
           </div>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && canAdd) submitDirect();
-            }}
-            placeholder="名称（可选）"
-            className="w-[160px] h-9 rounded-lg bg-[var(--shade)] border border-[var(--line)] px-3 text-[12.5px] focus:border-[var(--line)] transition-colors"
-          />
-          <button
-            className="btn-primary"
-            disabled={!canAdd}
-            style={{ opacity: canAdd ? 1 : 0.45 }}
-            onClick={submitDirect}
-          >
-            <Plus size={14} />
-            添加
-          </button>
-        </div>
+        )}
       </header>
 
-      {/* 多选操作条 */}
-      {selMode && (
+      {/* 多选操作条（仅当当前页签下有对应结果时显示） */}
+      {selMode && tabResult && (
         <div className="mx-5 mb-2 h-10 px-3 rounded-xl glass-strong flex items-center gap-1.5 shrink-0">
           <Square size={13} className="text-[var(--accent)] shrink-0" />
           <span className="text-[12px] text-[var(--ink)] mr-1 shrink-0">
@@ -633,7 +982,7 @@ export default function SourcesView() {
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-2">
-        {!result ? (
+        {tab === "navidrome" ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--ink-3)]">
             <div
               className="w-16 h-16 rounded-2xl flex items-center justify-center"
@@ -642,9 +991,28 @@ export default function SourcesView() {
                 border: "1px solid rgba(255,255,255,0.06)",
               }}
             >
-              <Tv size={26} className="text-[var(--ink-3)]" />
+              <Server size={26} className="text-[var(--ink-3)]" />
             </div>
-            <div className="text-[13.5px]">粘贴 B 站视频或 UP 主空间链接开始</div>
+            <div className="text-[13.5px]">Navidrome 支持即将上线，敬请期待</div>
+          </div>
+        ) : !result || !tabResult ? (
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--ink-3)]">
+            <div
+              className="w-16 h-16 rounded-2xl flex items-center justify-center"
+              style={{
+                background: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.06)",
+              }}
+            >
+              {tab === "other" ? (
+                <Link2 size={26} className="text-[var(--ink-3)]" />
+              ) : (
+                <Tv size={26} className="text-[var(--ink-3)]" />
+              )}
+            </div>
+            <div className="text-[13.5px]">
+              {tab === "other" ? "粘贴音频文件直链开始" : "粘贴 B 站视频或 UP 主空间链接开始"}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-2">
@@ -667,6 +1035,24 @@ export default function SourcesView() {
                       {space.fans} · 共 {space.total} 个视频
                     </div>
                   </div>
+                  {!selMode && (
+                    <button
+                      className={`btn-ghost h-8 px-3 text-[12px] shrink-0 flex items-center gap-1.5 ${
+                        spaceFollowed ? "text-[#fb7299]" : ""
+                      }`}
+                      onClick={() =>
+                        biliToggleFollow({
+                          mid: space.mid,
+                          name: space.name,
+                          face: space.face,
+                        })
+                      }
+                      title={spaceFollowed ? "取消收藏该 UP 主" : "收藏该 UP 主（显示在顶部横排）"}
+                    >
+                      <Star size={12} className={spaceFollowed ? "fill-current" : ""} />
+                      {spaceFollowed ? "已收藏" : "收藏UP主"}
+                    </button>
+                  )}
                   {!selMode && (
                     <button
                       className="btn-ghost h-8 px-3 text-[12px] shrink-0 flex items-center gap-1.5"

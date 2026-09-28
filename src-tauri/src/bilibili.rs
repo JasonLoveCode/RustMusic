@@ -1030,7 +1030,19 @@ pub fn space_series_archives(
     Ok((items, total, has_more))
 }
 
-/// 单视频解析（在线音源当前结果展示用）：返回每个分P一条完整元数据，
+/// 后台预热整个列表的 bvid→cid 缓存：自动连播时每首都现查 view 接口会
+/// 连续触发风控（-412/-352），整条队列逐首失败跳过。预热后切歌直接命中
+/// 缓存，不再发 view 请求。限速逐个解析，失败静默（播放时再重试）。
+pub fn warm_cids(rows: &[SpaceVideo], cookies: Option<BiliCookies>) {
+    let jobs: Vec<String> = rows.iter().map(|r| r.bvid.clone()).collect();
+    std::thread::spawn(move || {
+        for bvid in jobs {
+            let _ = parse_rid(&bvid);
+            std::thread::sleep(Duration::from_millis(400));
+        }
+    });
+    let _ = cookies;
+}
 /// rid 为 "BVxxx-cid"。不落库——列表只展示当前解析结果。
 /// 返回 (rid, title, artist, cover, duration_ms) 列表。
 pub fn video_rows(input: &str) -> Result<Vec<(String, String, String, String, u64)>, String> {
@@ -1143,6 +1155,73 @@ mod login_tests {
         println!("click first: {} play={}", rows2[0].title, rows2[0].play);
         let seasons = space_seasons(&mid, cookies.as_ref()).expect("合集失败");
         println!("collections: {}", seasons.len());
+    }
+
+    /// EOS 实证：完整解码缓存里真实播放过的 m4s 到末尾，迭代器必须干净终止
+    /// （EOS 坏了的表现恰是：歌放完了但 ended 事件不触发 → 不自动切下一首）。
+    #[test]
+    #[ignore]
+    fn e2e_symdec_eos_terminates() {
+        let dir = std::env::var("APPDATA").unwrap();
+        let dir = std::path::Path::new(&dir).join("com.rustmusic.app/downloads");
+        let mut found = None;
+        for e in std::fs::read_dir(&dir).expect("downloads 目录").flatten() {
+            let p = e.path();
+            if p.extension().and_then(|x| x.to_str()) == Some("m4s") {
+                found = Some(p);
+                break;
+            }
+        }
+        let path = found.expect("缓存里没有 m4s");
+        println!("file: {}", path.display());
+        use rodio::Source as _;
+        let mut src =
+            crate::symdec::SymphoniaSource::open(path.to_str().unwrap()).expect("打开失败");
+        let (sr, ch) = (src.sample_rate(), src.channels());
+        let mut n: u64 = 0;
+        for s in src.by_ref() {
+            let _ = s;
+            n += 1;
+        }
+        let secs = n as f64 / (sr as f64 * ch as f64);
+        println!("eos ok: samples={n} ≈{secs:.1}s (sr={sr} ch={ch})");
+        assert!(secs > 30.0, "解码时长异常偏短: {secs:.1}s");
+    }
+
+    /// 自动连播链路实证：空间列表首行（裸 BV rid）→ parse_rid（查 cid）
+    /// → audio_stream（直链）。自动切歌时每首都走这条，任何一环失败即断链。
+    #[test]
+    #[ignore]
+    fn e2e_bare_bv_autonext_chain() {
+        // 读应用登录态（匿名会撞风控）
+        let cookies = (|| -> Option<BiliCookies> {
+            let db = std::env::var("APPDATA").ok()?;
+            let conn = rusqlite::Connection::open_with_flags(
+                std::path::Path::new(&db).join("com.rustmusic.app/library.db"),
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .ok()?;
+            let get = |k: &str| -> String {
+                conn.query_row("SELECT value FROM settings WHERE key = ?1", [k], |r| r.get(0))
+                    .unwrap_or_default()
+            };
+            let sessdata = get("bili_sessdata");
+            if sessdata.is_empty() {
+                return None;
+            }
+            Some(BiliCookies { sessdata, buvid3: get("bili_buvid3") })
+        })();
+        let mid = parse_space("https://space.bilibili.com/229733301").expect("解析 mid 失败");
+        let (rows, _t, _h) = space_videos(&mid, "pubdate", 1, cookies.as_ref()).expect("列表失败");
+        assert!(rows.len() >= 2, "至少两首才能验证连播");
+        for r in rows.iter().take(2) {
+            println!("--- rid={}", r.bvid);
+            let (bvid, cid) = parse_rid(&r.bvid).expect("parse_rid 失败");
+            println!("    cid={cid}");
+            let (url, _q) = audio_stream(&bvid, cid).expect("audio_stream 失败");
+            println!("    audio ok: {}...", &url[..40.min(url.len())]);
+            // 第二首应命中 bvid→cid 缓存（同进程内无重复网络调用）
+        }
     }
 }
 

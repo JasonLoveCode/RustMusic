@@ -24,6 +24,7 @@ import type {
   OnlineSource,
   PlaylistEntryMeta,
   BiliTrack,
+  BiliFollow,
   DownloadState,
   Folder,
   LyricsPayload,
@@ -120,6 +121,12 @@ interface Store {
   /** B 站登录态（扫码；字幕功能依赖登录） */
   biliLoggedIn: boolean;
   biliNickname: string;
+  /** 收藏的 UP 主（localStorage 持久化，在线音源页横排展示） */
+  biliFollows: BiliFollow[];
+  /** 收藏/取消收藏 UP 主 */
+  biliToggleFollow(up: BiliFollow): void;
+  /** 拖拽排序收藏的 UP 主（from/to 为数组下标；松手落位并持久化） */
+  biliReorderFollows(from: number, to: number): void;
 
   /** 在线音源页“当前结果”（切页保留，换解析目标才替换） */
   sourcesResult: import("./types").SourcesResult | null;
@@ -129,6 +136,9 @@ interface Store {
       | null
       | ((cur: import("./types").SourcesResult | null) => import("./types").SourcesResult | null)
   ): void;
+  /** 在线音源页当前音源页签（切页保留） */
+  sourcesTab: "bilibili" | "navidrome" | "other";
+  setSourcesTab(t: "bilibili" | "navidrome" | "other"): void;
 
   quality: string;
   /** 关闭主窗口行为：tray = 最小化到托盘（默认）；exit = 直接退出应用 */
@@ -405,6 +415,32 @@ function jsonEq(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+/** 收藏 UP 主的 localStorage 键 */
+const BILI_FOLLOWS_KEY = "rustmusic.biliFollows";
+
+function loadBiliFollows(): BiliFollow[] {
+  try {
+    const raw = localStorage.getItem(BILI_FOLLOWS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr)
+      ? arr.filter(
+          (x): x is BiliFollow =>
+            x != null && typeof x.mid === "string" && typeof x.name === "string"
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBiliFollows(list: BiliFollow[]) {
+  try {
+    localStorage.setItem(BILI_FOLLOWS_KEY, JSON.stringify(list));
+  } catch {
+    // 存储失败仅影响下次启动的记忆，运行时状态不受影响
+  }
+}
+
 /** 应用后端播放状态：player://state 事件与挂起恢复后的主动拉取共用。
  *  posOverride：拉取快照自带进度时直接采用（事件路径由 isFreshStart 决定是否归零）。 */
 function applyPlayState(p: PlayState, posOverride?: number) {
@@ -627,8 +663,10 @@ export const useStore = create<Store>((set, get) => ({
   biliCache: {},
   biliLoggedIn: false,
   biliNickname: "",
+  biliFollows: loadBiliFollows(),
 
   sourcesResult: null,
+  sourcesTab: "bilibili",
 
   quality: "high",
   closeAction: "tray",
@@ -1703,6 +1741,32 @@ export const useStore = create<Store>((set, get) => ({
     set({ biliLoggedIn: loggedIn, biliNickname: nickname });
   },
 
+  biliToggleFollow(up) {
+    const list = get().biliFollows;
+    const exists = list.some((f) => f.mid === up.mid);
+    const next = exists
+      ? list.filter((f) => f.mid !== up.mid)
+      : [...list, { mid: up.mid, name: up.name, face: up.face }];
+    set({ biliFollows: next });
+    saveBiliFollows(next);
+    get().toast(
+      exists ? `已取消收藏 UP主「${up.name}」` : `已收藏 UP主「${up.name}」`,
+      exists ? "info" : "success"
+    );
+  },
+
+  biliReorderFollows(from, to) {
+    if (from === to) return;
+    const list = [...get().biliFollows];
+    if (from < 0 || from >= list.length) return;
+    const [moved] = list.splice(from, 1);
+    // to 为移除源后的最终下标（组件按被拖头像中心所在槽位折算好），直接落位
+    const toIdx = Math.max(0, Math.min(list.length, to));
+    list.splice(toIdx, 0, moved);
+    set({ biliFollows: list });
+    saveBiliFollows(list);
+  },
+
   playBilibili(row) {
     get().playBilibiliList([row], 0);
   },
@@ -1772,6 +1836,10 @@ export const useStore = create<Store>((set, get) => ({
     } else {
       set({ sourcesResult: r });
     }
+  },
+
+  setSourcesTab(t) {
+    set({ sourcesTab: t });
   },
 
   async biliLogout() {
