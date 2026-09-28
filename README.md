@@ -4,7 +4,7 @@
 
 ![tech](https://img.shields.io/badge/Rust-1.77+-DEA584) ![tech](https://img.shields.io/badge/Tauri-2-24C8D8) ![tech](https://img.shields.io/badge/React-18-61DAFB) ![platform](https://img.shields.io/badge/platform-Windows-blue)
 
-<img src="https://cdn.jsdelivr.net/gh/LingyunStudio/LingyunImg@master/2026/09/upgit_20260922_1790079638.png" alt="image-20260922202036015" style="zoom: 67%;" />
+<img src="https://cdn.jsdelivr.net/gh/LingyunStudio/LingyunImg@master/2026/09/upgit_20260929_1790618751.png" alt="image-20260929020549943" style="zoom: 67%;" />
 
 ## ✨ 功能特性
 
