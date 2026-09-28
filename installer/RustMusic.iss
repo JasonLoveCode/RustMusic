@@ -5,8 +5,11 @@
 
 #define MyAppName "RustMusic"
 #define MyAppExeName "rustmusic.exe"
-; 版本号直接取自编译产物的文件版本，与 tauri.conf.json 保持一致
-#define MyAppVersion GetFileVersion("..\src-tauri\target\release\rustmusic.exe")
+; 版本号取自编译产物的文件版本。Windows 文件版本固定四段（X.Y.Z.0），
+; 而应用版本 / release tag 是三段（X.Y.Z）——去掉末尾 ".0" 保持一致，
+; 安装包命名为 RustMusic_0.2.0_x64-setup.exe
+#define RawVersion GetFileVersion("..\src-tauri\target\release\rustmusic.exe")
+#define MyAppVersion Copy(RawVersion, 1, Len(RawVersion) - 2)
 
 [Setup]
 AppId={{B7DA4657-0D10-4718-A6D5-A02863D39352}
