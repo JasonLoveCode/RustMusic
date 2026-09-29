@@ -12,9 +12,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Folder,
   Heart,
   Link2,
   ListMusic,
+  Loader2,
   Play,
   Plus,
   Server,
@@ -362,6 +364,8 @@ export default function SourcesView() {
   const [title, setTitle] = useState("");
   const [bili, setBili] = useState("");
   const [biliBusy, setBiliBusy] = useState(false);
+  /** 收藏夹列表加载中 */
+  const [favLoading, setFavLoading] = useState(false);
   /** 多选模式与选中行（key = rid） */
   const [selMode, setSelMode] = useState(false);
   const [selKeys, setSelKeys] = useState<Set<string>>(new Set());
@@ -370,9 +374,21 @@ export default function SourcesView() {
   /** “添加到播放列表”弹窗（支持批量） */
   const [pickerRows, setPickerRows] = useState<BiliSpaceItem[] | null>(null);
   const [newPlName, setNewPlName] = useState("");
+  // “创建并添加”进行中：双击会创建两个同名歌单（后端不按名去重）
+  const [creatingPl, setCreatingPl] = useState(false);
   /** B 站扫码登录弹窗 */
   const [qr, setQr] = useState<{ qr: string } | null>(null);
   const qrRunRef = useRef(0);
+  // 组件卸载（切到其他视图）时终止扫码轮询：Modal 随卸载消失但不触发
+  // onClose，轮询循环唯一的常规取消路径会漏掉这种情况
+  useEffect(() => {
+    return () => {
+      qrRunRef.current++;
+    };
+  }, []);
+  // UP 空间请求代次：切排序/进合集/换空间会使在途旧响应作废，
+  // 防止慢的旧响应覆盖新结果或把已退出的合集装回 UI
+  const spaceGenRef = useRef(0);
 
   const canAdd = useMemo(() => /^https?:\/\//.test(url.trim()), [url]);
 
@@ -427,7 +443,9 @@ export default function SourcesView() {
 
   /** 解析 UP 主空间（输入可为 space 链接或纯 UID），写入结果区 */
   const openSpace = async (input: string) => {
+    const gen = ++spaceGenRef.current;
     const r = await useStore.getState().biliSpace(input, "pubdate");
+    if (gen !== spaceGenRef.current) return;
     replaceResult({
       type: "space",
       mid: r.mid,
@@ -477,6 +495,9 @@ export default function SourcesView() {
   const changeOrder = async (order: "pubdate" | "click" | "stow") => {
     if (!result || result.type !== "space") return;
     const s = result;
+    // 收藏夹伪空间没有投稿排序概念
+    if (s.mid === "fav") return;
+    const gen = ++spaceGenRef.current;
     try {
       setResult({
         ...s,
@@ -489,12 +510,14 @@ export default function SourcesView() {
       });
       setSelKeys(new Set());
       const r = await useStore.getState().biliSpaceMore(s.mid, order, 1);
+      if (gen !== spaceGenRef.current) return;
       setResult((cur) =>
         cur && cur.type === "space" && cur.mid === s.mid
           ? { ...cur, order, rows: r.items, pn: 1, hasMore: r.hasMore, loadingMore: false }
           : cur
       );
     } catch (e) {
+      if (gen !== spaceGenRef.current) return;
       setResult({ ...s, loadingMore: false });
       useStore.getState().toast(String(e), "error");
     }
@@ -503,6 +526,7 @@ export default function SourcesView() {
   const loadMore = async () => {
     if (!result || result.type !== "space") return;
     const s = result;
+    const gen = spaceGenRef.current;
     if (s.activeCollection) {
       const c = s.activeCollection;
       if (c.loadingMore || !c.hasMore) return;
@@ -511,6 +535,7 @@ export default function SourcesView() {
         const r = await useStore
           .getState()
           .biliSpaceCollectionMore(s.mid, c.id, c.kind, c.pn + 1);
+        if (gen !== spaceGenRef.current) return;
         setResult((cur) =>
           cur && cur.type === "space" && cur.activeCollection?.id === c.id
             ? {
@@ -526,6 +551,7 @@ export default function SourcesView() {
             : cur
         );
       } catch (e) {
+        if (gen !== spaceGenRef.current) return;
         setResult({ ...s, activeCollection: { ...c, loadingMore: false } });
         useStore.getState().toast(String(e), "error");
       }
@@ -534,6 +560,7 @@ export default function SourcesView() {
       setResult({ ...s, loadingMore: true });
       try {
         const r = await useStore.getState().biliSpaceMore(s.mid, s.order, s.pn + 1);
+        if (gen !== spaceGenRef.current) return;
         setResult((cur) =>
           cur && cur.type === "space" && cur.mid === s.mid
             ? {
@@ -546,6 +573,7 @@ export default function SourcesView() {
             : cur
         );
       } catch (e) {
+        if (gen !== spaceGenRef.current) return;
         setResult({ ...s, loadingMore: false });
         useStore.getState().toast(String(e), "error");
       }
@@ -555,6 +583,7 @@ export default function SourcesView() {
   const openCollection = async (c: BiliCollection) => {
     if (!result || result.type !== "space") return;
     const s = result;
+    const gen = ++spaceGenRef.current;
     try {
       setResult({
         ...s,
@@ -562,6 +591,7 @@ export default function SourcesView() {
       });
       setSelKeys(new Set());
       const r = await useStore.getState().biliSpaceCollection(s.mid, c.id, c.kind);
+      if (gen !== spaceGenRef.current) return;
       setResult((cur) =>
         cur && cur.type === "space" && cur.mid === s.mid
           ? {
@@ -577,8 +607,70 @@ export default function SourcesView() {
           : cur
       );
     } catch (e) {
+      if (gen !== spaceGenRef.current) return;
       setResult({ ...s, activeCollection: null });
       useStore.getState().toast(String(e), "error");
+    }
+  };
+
+  /** 打开登录用户的收藏夹：装载成伪空间（mid="fav"），收藏夹作为
+   *  kind="fav" 的合集 chips 展示，内容走 biliSpaceCollection 的 fav 分支 */
+  const openFavs = async () => {
+    if (favLoading) return;
+    const gen = ++spaceGenRef.current;
+    setFavLoading(true);
+    try {
+      const { folders, name, face } = await useStore.getState().biliFavFolders();
+      if (gen !== spaceGenRef.current) return;
+      const total = folders.reduce((a, f) => a + f.total, 0);
+      replaceResult({
+        type: "space",
+        mid: "fav",
+        name: name || "我的收藏夹",
+        face,
+        fans: "",
+        total,
+        order: "pubdate",
+        rows: [],
+        pn: 1,
+        hasMore: false,
+        loadingMore: false,
+        collections: folders.map((f) => ({
+          id: f.id,
+          kind: "fav",
+          title: f.title,
+          total: f.total,
+        })),
+        activeCollection: null,
+      });
+      // 自动展开第一个收藏夹（openCollection 读渲染闭包的 result，
+      // 这里是刚 replace 的，直接拉内容回填）
+      if (folders.length) {
+        const first = folders[0];
+        const r = await useStore.getState().biliSpaceCollection("fav", first.id, "fav");
+        if (gen !== spaceGenRef.current) return;
+        setResult((cur) =>
+          cur && cur.type === "space" && cur.mid === "fav"
+            ? {
+                ...cur,
+                activeCollection: {
+                  id: first.id,
+                  kind: "fav",
+                  title: first.title,
+                  total: first.total,
+                  rows: r.items,
+                  pn: 1,
+                  hasMore: r.hasMore,
+                  loadingMore: false,
+                },
+              }
+            : cur
+        );
+      }
+    } catch (e) {
+      useStore.getState().toast(String(e), "error");
+    } finally {
+      if (gen === spaceGenRef.current) setFavLoading(false);
     }
   };
 
@@ -865,6 +957,19 @@ export default function SourcesView() {
               </button>
               <button
                 className="btn-secondary h-9 px-3 text-[12px] shrink-0 flex items-center gap-1.5"
+                disabled={favLoading}
+                onClick={openFavs}
+                title="查看登录用户创建的收藏夹"
+              >
+                {favLoading ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Folder size={13} />
+                )}
+                我的收藏夹
+              </button>
+              <button
+                className="btn-secondary h-9 px-3 text-[12px] shrink-0 flex items-center gap-1.5"
                 onClick={() => (biliLoggedIn ? undefined : startBiliLogin())}
                 title={biliLoggedIn ? "" : "登录 B 站后可显示视频字幕（作歌词）、按收藏排序"}
               >
@@ -983,9 +1088,14 @@ export default function SourcesView() {
       )}
 
       <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-2">
-        {tab === "navidrome" ? (
+        {/* Navidrome 常驻挂载：切 Tab 用 display:none 隐藏而非卸载——
+            保留连接状态、当前页面（导航栈）与滚动位置，
+            切回来不再闪登录页重新自动连接 */}
+        <div className={tab === "navidrome" ? "h-full" : "hidden"}>
           <NavidromePanel />
-        ) : !result || !tabResult ? (
+        </div>
+        {tab !== "navidrome" &&
+          (!result || !tabResult ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--ink-3)]">
             <div
               className="w-16 h-16 rounded-2xl flex items-center justify-center"
@@ -1022,10 +1132,12 @@ export default function SourcesView() {
                     </div>
                     <div className="text-[11.5px] text-[var(--ink-2)] flex items-center gap-1.5 mt-0.5">
                       <Users size={10} />
-                      {space.fans} · 共 {space.total} 个视频
+                      {space.mid === "fav"
+                        ? `共 ${space.total} 个视频`
+                        : `${space.fans} · 共 ${space.total} 个视频`}
                     </div>
                   </div>
-                  {!selMode && (
+                  {!selMode && space.mid !== "fav" && (
                     <button
                       className={`btn-ghost h-8 px-3 text-[12px] shrink-0 flex items-center gap-1.5 ${
                         spaceFollowed ? "text-[#fb7299]" : ""
@@ -1065,19 +1177,21 @@ export default function SourcesView() {
                   </button>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {ORDERS.map((o) => (
-                    <button
-                      key={o.key}
-                      className={`h-7 px-3 rounded-full text-[11.5px] transition-colors ${
-                        !space.activeCollection && space.order === o.key
-                          ? "bg-[#fb7299]/15 text-[#fb7299] font-semibold"
-                          : "text-[var(--ink-2)] hover:bg-[var(--shade)]"
-                      }`}
-                      onClick={() => changeOrder(o.key)}
-                    >
-                      {o.label}
-                    </button>
-                  ))}
+                  {/* 收藏夹伪空间没有投稿排序 */}
+                  {space.mid !== "fav" &&
+                    ORDERS.map((o) => (
+                      <button
+                        key={o.key}
+                        className={`h-7 px-3 rounded-full text-[11.5px] transition-colors ${
+                          !space.activeCollection && space.order === o.key
+                            ? "bg-[#fb7299]/15 text-[#fb7299] font-semibold"
+                            : "text-[var(--ink-2)] hover:bg-[var(--shade)]"
+                        }`}
+                        onClick={() => changeOrder(o.key)}
+                      >
+                        {o.label}
+                      </button>
+                    ))}
                   {space.collections.map((c) => (
                     <button
                       key={`${c.kind}-${c.id}`}
@@ -1172,7 +1286,7 @@ export default function SourcesView() {
                 </button>
               )}
           </div>
-        )}
+            ))}
       </div>
 
       {/* 右键菜单（Portal 到 body：fixed 相对视口定位） */}
@@ -1289,13 +1403,19 @@ export default function SourcesView() {
           />
           <button
             className="btn-secondary"
+            disabled={creatingPl}
             onClick={async () => {
-              if (!newPlName.trim() || !pickerRows?.length) return;
-              const pid = await createPlaylist(newPlName.trim());
-              if (pid >= 0) {
-                for (const r of pickerRows) {
-                  await addOnlineToPlaylist(pid, toOnlineRow(r));
+              if (creatingPl || !newPlName.trim() || !pickerRows?.length) return;
+              setCreatingPl(true);
+              try {
+                const pid = await createPlaylist(newPlName.trim());
+                if (pid >= 0) {
+                  for (const r of pickerRows) {
+                    await addOnlineToPlaylist(pid, toOnlineRow(r));
+                  }
                 }
+              } finally {
+                setCreatingPl(false);
               }
               setNewPlName("");
               setPickerRows(null);

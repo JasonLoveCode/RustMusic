@@ -582,6 +582,8 @@ fn main() {
             commands::bilibili_space_more,
             commands::bilibili_space_collection,
             commands::bilibili_space_collection_more,
+            commands::bilibili_fav_folders,
+            commands::bilibili_fav_list,
             commands::bilibili_video_info,
             commands::play_source,
             commands::netease_search,

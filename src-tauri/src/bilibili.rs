@@ -62,8 +62,13 @@ pub fn looks_like_bili(input: &str) -> bool {
 /// 从输入提取 (bvid 或 aid, 分P页码)。支持完整链接、b23.tv 短链、纯 BV/av 号。
 fn extract_id(input: &str) -> Result<(String, Option<u32>), String> {
     let mut s = input.trim().to_string();
-    // 短链跟随重定向拿真实视频页地址（只取最终 URL，不读响应体）
+    // 短链跟随重定向拿真实视频页地址（只取最终 URL，不读响应体）。
+    // 不带协议头的 "b23.tv/xxx"（looks_like_bili 放行）补上 https://，
+    // 否则 HTTP 客户端无法请求，与 www.bilibili.com 形式行为不一致
     if s.to_lowercase().contains("b23.tv/") {
+        if !s.to_lowercase().starts_with("http://") && !s.to_lowercase().starts_with("https://") {
+            s = format!("https://{s}");
+        }
         let resp = agent()
             .get(&s)
             .call()
@@ -1026,6 +1031,121 @@ pub fn space_series_archives(
         .filter(|s| !s.bvid.is_empty())
         .collect();
     let total = v["data"]["total"].as_u64().unwrap_or(items.len() as u64);
+    let has_more = (pn as u64) * 30 < total;
+    Ok((items, total, has_more))
+}
+
+// ---------- 登录用户的收藏夹 ----------
+
+const NAV_API: &str = "https://api.bilibili.com/x/web-interface/nav";
+const FAV_FOLDER_API: &str = "https://api.bilibili.com/x/v3/fav/folder/created/list";
+const FAV_RESOURCE_API: &str = "https://api.bilibili.com/x/v3/fav/resource/list";
+const FAV_REFERER: &str = "https://space.bilibili.com";
+
+/// 登录用户信息（nav 接口，需有效 SESSDATA）
+pub struct NavUser {
+    pub mid: String,
+    pub uname: String,
+    pub face: String,
+}
+
+pub fn nav_user(cookies: &BiliCookies) -> Result<NavUser, String> {
+    let v = api_json_auth_ref(NAV_API, Some(cookies), "https://www.bilibili.com")?;
+    if v["code"].as_i64() != Some(0) {
+        return Err("获取 B 站登录信息失败（登录可能已过期，请重新扫码）".into());
+    }
+    let mid = v["data"]["mid"].as_u64().unwrap_or(0);
+    if mid == 0 {
+        return Err("B 站未登录".into());
+    }
+    Ok(NavUser {
+        mid: mid.to_string(),
+        uname: v["data"]["uname"].as_str().unwrap_or("").to_string(),
+        face: v["data"]["face"]
+            .as_str()
+            .unwrap_or("")
+            .replace("http://", "https://"),
+    })
+}
+
+/// 登录用户的 mid（nav 接口，需有效 SESSDATA）
+pub fn nav_mid(cookies: &BiliCookies) -> Result<String, String> {
+    nav_user(cookies).map(|u| u.mid)
+}
+
+/// 收藏夹（用户自建）
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FavFolder {
+    pub id: i64,
+    pub title: String,
+    pub total: u64,
+}
+
+/// 登录用户创建的收藏夹列表（需 SESSDATA，私密收藏夹一并可见）。
+/// 同时带回登录用户信息（昵称/头像，供结果区展示）
+pub fn fav_folders(cookies: &BiliCookies) -> Result<(NavUser, Vec<FavFolder>), String> {
+    let user = nav_user(cookies)?;
+    let v = api_json_auth_ref(
+        &format!("{FAV_FOLDER_API}?up_mid={}&pn=1&ps=100", user.mid),
+        Some(cookies),
+        FAV_REFERER,
+    )?;
+    if v["code"].as_i64() != Some(0) {
+        return Err(bili_error(&v, "获取收藏夹列表"));
+    }
+    let mut out = Vec::new();
+    for f in v["data"]["list"].as_array().cloned().unwrap_or_default() {
+        let id = f["id"].as_i64().unwrap_or(0);
+        let title = f["title"].as_str().unwrap_or("").trim().to_string();
+        if id == 0 || title.is_empty() {
+            continue;
+        }
+        out.push(FavFolder {
+            id,
+            title,
+            total: f["media_count"].as_u64().unwrap_or(0),
+        });
+    }
+    Ok((user, out))
+}
+
+/// 收藏夹内容分页：只收普通视频（type=2，带 bvid），音频/合集条目不可播。
+/// 返回与合集一致的 (条目, 总数, 是否还有更多)
+pub fn fav_folder_videos(
+    media_id: i64,
+    pn: u32,
+    cookies: &BiliCookies,
+) -> Result<(Vec<SpaceVideo>, u64, bool), String> {
+    let v = api_json_auth_ref(
+        &format!(
+            "{FAV_RESOURCE_API}?media_id={media_id}&pn={pn}&ps=30&keyword=&order=mtime&type=0&tid=0&platform=web"
+        ),
+        Some(cookies),
+        FAV_REFERER,
+    )?;
+    if v["code"].as_i64() != Some(0) {
+        return Err(bili_error(&v, "获取收藏夹内容"));
+    }
+    let items: Vec<SpaceVideo> = (v["data"]["medias"].as_array().cloned().unwrap_or_default())
+        .iter()
+        .filter(|it| it["type"].as_i64() == Some(2))
+        .map(|it| SpaceVideo {
+            bvid: it["bv_id"].as_str().unwrap_or("").to_string(),
+            title: it["title"].as_str().unwrap_or("").to_string(),
+            cover: it["cover"]
+                .as_str()
+                .unwrap_or("")
+                .replace("http://", "https://"),
+            duration_ms: (it["duration"].as_u64().unwrap_or(0)) * 1000,
+            play: it["cnt_info"]["play"].as_u64().unwrap_or(0),
+            created: it["pubdate"].as_i64().unwrap_or(0),
+        })
+        .filter(|s| !s.bvid.is_empty())
+        .collect();
+    let total = v["data"]["info"]["media_count"]
+        .as_u64()
+        .unwrap_or(items.len() as u64);
     let has_more = (pn as u64) * 30 < total;
     Ok((items, total, has_more))
 }
