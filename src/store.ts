@@ -520,7 +520,9 @@ function applyPlayState(p: PlayState, posOverride?: number) {
             ? `kug-${p.kgid}`
             : p.kind === "bilibili" && p.qid != null
               ? `bili-${p.qid}`
-              : null;
+              : p.kind === "navidrome" && p.qid != null
+                ? `nd-${p.qid}`
+                : null;
   if (key) get().loadLyricsByKey(key);
   // 换曲开播：在线曲目更新“最近播放”；本地曲目只在本地更新单条的
   // lastPlayed/playCount（后端 record_play 已在开播时落库）——
@@ -2449,9 +2451,11 @@ export const useStore = create<Store>((set, get) => ({
             ? await api.qqLyric(id)
             : kind === "kug"
               ? await api.kugouLyric(id)
-              : kind === "bili"
-                ? await api.biliLyric(id)
-                : await api.getLyrics(Number(id));
+              : kind === "nd"
+                ? await api.navidromeLyric(id)
+                : kind === "bili"
+                  ? await api.biliLyric(id)
+                  : await api.getLyrics(Number(id));
       if (get().lyricsFor === key) {
         set({ lyrics: payload, lyricsLoading: false });
         pushDesktopLyrics(get());

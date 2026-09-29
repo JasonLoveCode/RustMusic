@@ -613,6 +613,22 @@ pub async fn navidrome_play(
     engine_clone(&state).play_url(url, info)
 }
 
+#[tauri::command]
+pub async fn navidrome_lyric(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<crate::models::LyricsPayload, String> {
+    let server = crate::navidrome::norm_base(&{
+        let conn = state.db.lock();
+        db::get_setting(&conn, "navidrome_server").unwrap_or_default()
+    });
+    let username = {
+        let conn = state.db.lock();
+        db::get_setting(&conn, "navidrome_username").unwrap_or_default()
+    };
+    crate::navidrome::lyrics(&server, &username, &id)
+}
+
 // ---------- B 站登录（扫码） ----------
 // ---------- B 站登录（扫码） ----------
 

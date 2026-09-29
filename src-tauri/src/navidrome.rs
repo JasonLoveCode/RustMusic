@@ -16,6 +16,9 @@ const API_VER: &str = "1.16.1";
 // ---------- 凭据管理器 ----------
 
 fn keyring_entry(server: &str, username: &str) -> Result<keyring::Entry, String> {
+    // 键统一用归一化后的服务器名（补 scheme、去尾斜杠），
+    // 避免"存的是 http://…、取的是原始输入"导致键对不上
+    let server = norm_base(server);
     keyring::Entry::new("RustMusic Navidrome", &format!("{server}|{username}"))
         .map_err(|e| format!("凭据管理器不可用: {e}"))
 }
@@ -286,6 +289,125 @@ pub fn cover_art_url(server: &str, username: &str, password: &str, cover_art: &s
         enc(username),
         enc(cover_art)
     )
+}
+
+/// 歌词：优先 OpenSubsonic getLyricsBySongId（Navidrome 0.54+ 支持同步歌词），
+/// 空则回落旧版 getLyrics（按歌手+曲名模糊匹配，纯文本）
+pub fn lyrics(server: &str, username: &str, id: &str) -> Result<crate::models::LyricsPayload, String> {
+    let password = get_password(server, username)?;
+    let base = norm_base(server);
+
+    // 1) getLyricsBySongId
+    let salt = rand_salt();
+    let token = md5_hex(&format!("{password}{salt}"));
+    let url = format!(
+        "{base}/rest/getLyricsBySongId?u={}&t={token}&s={salt}&v={API_VER}&c={CLIENT}&f=json&id={}",
+        enc(username),
+        enc(id)
+    );
+    if let Ok(resp) = ureq::get(&url).timeout(TIMEOUT).call() {
+        if let Ok(text) = resp.into_string() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let sl = v.pointer("/subsonic-response/lyricsList/structuredLyrics/0");
+                if let Some(sl) = sl {
+                    let offset = sl.get("offset").and_then(|x| x.as_u64()).unwrap_or(0);
+                    let synced = sl.get("synced").and_then(|x| x.as_bool()).unwrap_or(false);
+                    let empty = Vec::new();
+                    let lines = sl
+                        .get("line")
+                        .and_then(|x| x.as_array())
+                        .unwrap_or(&empty);
+                    if synced && !lines.is_empty() {
+                        let out: Vec<crate::models::LyricLine> = lines
+                            .iter()
+                            .filter_map(|l| {
+                                let start = l.get("start").and_then(|x| x.as_u64())? + offset;
+                                let value = l.get("value").and_then(|x| x.as_str())?.to_string();
+                                Some(crate::models::LyricLine {
+                                    time_ms: Some(start),
+                                    text: value,
+                                    words: None,
+                                })
+                            })
+                            .collect();
+                        if !out.is_empty() {
+                            return Ok(crate::models::LyricsPayload {
+                                synced: true,
+                                lines: out,
+                            });
+                        }
+                    } else {
+                        // 非同步歌词：拼成纯文本
+                        let text = lines
+                            .iter()
+                            .filter_map(|l| l.get("value").and_then(|x| x.as_str()))
+                            .collect::<Vec<_>>()
+                            .join("
+");
+                        if !text.trim().is_empty() {
+                            let p = crate::lyrics::parse(&text);
+                            return Ok(crate::models::LyricsPayload {
+                                synced: p.synced,
+                                lines: p.lines,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) 旧版 getLyrics：需要歌手+曲名，先 getSong 拿元数据
+    let salt = rand_salt();
+    let token = md5_hex(&format!("{password}{salt}"));
+    let url = format!(
+        "{base}/rest/getSong?u={}&t={token}&s={salt}&v={API_VER}&c={CLIENT}&f=json&id={}",
+        enc(username),
+        enc(id)
+    );
+    if let Ok(resp) = ureq::get(&url).timeout(TIMEOUT).call() {
+        if let Ok(text) = resp.into_string() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let song = v.pointer("/subsonic-response/song");
+                if let Some(song) = song {
+                    let artist = jstr(song, "artist");
+                    let title = jstr(song, "title");
+                    if !artist.is_empty() && !title.is_empty() {
+                        let salt2 = rand_salt();
+                        let token2 = md5_hex(&format!("{password}{salt2}"));
+                        let lurl = format!(
+                            "{base}/rest/getLyrics?u={}&t={token2}&s={salt2}&v={API_VER}&c={CLIENT}&f=json&artist={}&title={}",
+                            enc(username),
+                            enc(&artist),
+                            enc(&title)
+                        );
+                        if let Ok(lresp) = ureq::get(&lurl).timeout(TIMEOUT).call() {
+                            if let Ok(ltext) = lresp.into_string() {
+                                if let Ok(lv) = serde_json::from_str::<serde_json::Value>(&ltext) {
+                                    if let Some(value) =
+                                        lv.pointer("/subsonic-response/lyrics/value").and_then(|x| x.as_str())
+                                    {
+                                        if !value.trim().is_empty() {
+                                            let p = crate::lyrics::parse(value);
+                                            return Ok(crate::models::LyricsPayload {
+                                                synced: p.synced,
+                                                lines: p.lines,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(crate::models::LyricsPayload {
+        synced: false,
+        lines: vec![],
+    })
 }
 
 #[cfg(test)]

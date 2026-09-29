@@ -295,6 +295,8 @@ export const api = {
   ) => invoke<void>("navidrome_play", { server, username, track }),
   navidromeForget: (server: string, username: string) =>
     invoke<void>("navidrome_forget", { server, username }),
+  navidromeLyric: (id: string) =>
+    invoke<import("./types").LyricsPayload>("navidrome_lyric", { id }),
   playTrack: (id: number) => invoke<void>("play_track", { id }),
   playSource: (id: number) => invoke<void>("play_source", { id }),
   playPause: () => invoke<void>("play_pause"),
