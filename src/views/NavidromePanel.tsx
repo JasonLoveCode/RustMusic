@@ -27,6 +27,33 @@ type View =
   | { page: "album"; id: string; name: string; artist: string }
   | { page: "search"; query: string };
 
+/** 模块级状态快照：本组件随主视图切换（去 QQ/网易云/资料库等页面）
+ *  会被整体卸载，把面板状态存在这里，重新挂载时恢复——连接状态、
+ *  当前页面、列表数据、搜索词全部保留，不再闪登录页重新自动连接 */
+const ndSnapshot: {
+  connected: boolean;
+  view: View;
+  albums: NdAlbum[];
+  albumSongs: NdSong[];
+  allSongs: NdSong[];
+  total: number;
+  seg: "albums" | "songs";
+  kw: string;
+  searched: boolean;
+  navStack: { view: View; albumSongs: NdSong[]; kw: string; searched: boolean }[];
+} = {
+  connected: false,
+  view: { page: "albums" },
+  albums: [],
+  albumSongs: [],
+  allSongs: [],
+  total: 0,
+  seg: "albums",
+  kw: "",
+  searched: false,
+  navStack: [],
+};
+
 export default function NavidromePanel() {
   const toast = useStore((s) => s.toast);
   const playNext = useStore((s) => s.playNext);
@@ -39,28 +66,49 @@ export default function NavidromePanel() {
   const [username, setUsername] = useState(localStorage.getItem(LS_USER) ?? "");
   const [password, setPassword] = useState("");
   const [connecting, setConnecting] = useState(false);
-  const [connected, setConnected] = useState(false);
+  const [connected, setConnected] = useState(ndSnapshot.connected);
 
-  const [view, setView] = useState<View>({ page: "albums" });
-  const [albums, setAlbums] = useState<NdAlbum[]>([]);
-  const [albumSongs, setAlbumSongs] = useState<NdSong[]>([]);
+  const [view, setView] = useState<View>(ndSnapshot.view);
+  const [albums, setAlbums] = useState<NdAlbum[]>(ndSnapshot.albums);
+  const [albumSongs, setAlbumSongs] = useState<NdSong[]>(ndSnapshot.albumSongs);
   const [loading, setLoading] = useState(false);
-  const [seg, setSeg] = useState<"albums" | "songs">("albums");
-  const [allSongs, setAllSongs] = useState<NdSong[]>([]);
-  const [total, setTotal] = useState(0);
+  const [seg, setSeg] = useState<"albums" | "songs">(ndSnapshot.seg);
+  const [allSongs, setAllSongs] = useState<NdSong[]>(ndSnapshot.allSongs);
+  const [total, setTotal] = useState(ndSnapshot.total);
 
-  const [kw, setKw] = useState("");
-  const [searched, setSearched] = useState(false);
+  const [kw, setKw] = useState(ndSnapshot.kw);
+  const [searched, setSearched] = useState(ndSnapshot.searched);
 
   const [menu, setMenu] = useState<{ x: number; y: number; song: NdSong } | null>(null);
   const [pickerSong, setPickerSong] = useState<NdSong | null>(null);
   const [downloading, setDownloading] = useState(false);
 
-  const navStack = useRef<View[]>([]);
+  // 导航栈带数据快照：goBack 时标题与列表必须一起回退，
+  // 否则"专辑 A → 搜索 → 返回"会显示专辑 A 的标题配搜索结果的列表。
+  // 栈数组本体存快照里，跨卸载保留
+  const navStack = useRef(ndSnapshot.navStack);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // 请求代次：新导航（开专辑/搜索/加载更多）使在途旧响应全部作废，
+  // 防止慢的旧响应后到覆盖新结果
+  const reqGen = useRef(0);
+
+  // 每次渲染后把状态同步进模块级快照（纯赋值，开销可忽略）
+  useEffect(() => {
+    ndSnapshot.connected = connected;
+    ndSnapshot.view = view;
+    ndSnapshot.albums = albums;
+    ndSnapshot.albumSongs = albumSongs;
+    ndSnapshot.allSongs = allSongs;
+    ndSnapshot.total = total;
+    ndSnapshot.seg = seg;
+    ndSnapshot.kw = kw;
+    ndSnapshot.searched = searched;
+  });
 
   useEffect(() => {
-    // 打开页签即尝试用已保存的连接信息恢复专辑列表
+    // 快照恢复了完整状态（连接过且有数据）：直接沿用，不重新连接拉取
+    if (ndSnapshot.connected && albums.length) return;
+    // 首次打开：用已保存的连接信息自动连接并拉取专辑列表
     if (!server || !username) return;
     let dead = false;
     (async () => {
@@ -131,6 +179,7 @@ export default function NavidromePanel() {
     setUsername("");
     setConnected(false);
     setAlbums([]);
+    navStack.current = []; // 断开后返回栈失效，一并清掉
     setView({ page: "albums" });
     toast("已断开并清除保存的密码", "success");
   };
@@ -191,53 +240,64 @@ export default function NavidromePanel() {
   });
 
   const openAlbum = async (a: NdAlbum) => {
-    navStack.current.push(view);
+    navStack.current.push({ view, albumSongs, kw, searched });
+    const gen = ++reqGen.current;
     setLoading(true);
     try {
       const r = await api.navidromeAlbumSongs(server, username, a.id);
+      if (gen !== reqGen.current) return;
       setAlbumSongs(r.songs);
       setView({ page: "album", id: a.id, name: r.name, artist: r.artist });
     } catch (e) {
-      toast(String(e), "error");
+      if (gen === reqGen.current) toast(String(e), "error");
     } finally {
-      setLoading(false);
+      if (gen === reqGen.current) setLoading(false);
     }
   };
 
   const submitSearch = async () => {
     const q = kw.trim();
     if (!q) return;
-    navStack.current.push(view);
+    navStack.current.push({ view, albumSongs, kw, searched });
+    const gen = ++reqGen.current;
     setLoading(true);
     try {
       const r = await api.navidromeSearch(server, username, q);
+      if (gen !== reqGen.current) return;
       setAlbumSongs(r);
       setView({ page: "search", query: q });
       setSearched(true);
     } catch (e) {
-      toast(String(e), "error");
+      if (gen === reqGen.current) toast(String(e), "error");
     } finally {
-      setLoading(false);
+      if (gen === reqGen.current) setLoading(false);
     }
   };
 
   const loadMoreSongs = async () => {
     if (loading) return;
+    const gen = ++reqGen.current;
     setLoading(true);
     try {
       const r = await api.navidromeAllSongs(server, username, allSongs.length);
+      if (gen !== reqGen.current) return;
       setAllSongs((prev) => [...prev, ...r.songs]);
       setTotal(r.total);
     } catch (e) {
-      toast(String(e), "error");
+      if (gen === reqGen.current) toast(String(e), "error");
     } finally {
-      setLoading(false);
+      if (gen === reqGen.current) setLoading(false);
     }
   };
 
   const goBack = () => {
     const prev = navStack.current.pop();
-    if (prev) setView(prev);
+    if (!prev) return;
+    reqGen.current++; // 作废在途响应
+    setAlbumSongs(prev.albumSongs);
+    setKw(prev.kw);
+    setSearched(prev.searched);
+    setView(prev.view);
   };
 
   const downloadSong = async (s: NdSong) => {
@@ -490,7 +550,10 @@ export default function NavidromePanel() {
                 )}
               </div>
             )}
-            {!loading && view.page !== "albums" && (
+            {/* 专辑详情 / 搜索结果共用此块；songs 页有自己的全曲库块，
+                不能落进来——否则 albumSongs 的残留行会叠在 allSongs 下面
+                （表现为歌曲页多出几行，计数却是全曲库的） */}
+            {!loading && (view.page === "album" || view.page === "search") && (
               <>
                 {view.page === "album" && (
                   <div className="flex items-end gap-4 mb-4">
