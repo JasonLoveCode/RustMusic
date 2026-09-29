@@ -1263,6 +1263,18 @@ export const useStore = create<Store>((set, get) => ({
       set({ biliCache });
       return { kind: "bilibili", id: e.onlineId };
     }
+    if (e.kind === "navidrome" && e.onlineId) {
+      const ndCache = { ...get().ndCache };
+      ndCache[e.onlineId] = {
+        title: e.title,
+        artist: e.artist,
+        album: e.album,
+        cover: e.cover,
+        durationMs: Math.round(e.duration * 1000),
+      };
+      set({ ndCache });
+      return { kind: "navidrome", id: e.onlineId };
+    }
     return null;
   },
 

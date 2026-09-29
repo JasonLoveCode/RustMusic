@@ -577,7 +577,10 @@ export default function TrackList({
             onClick={() =>
               toggleLikeOnline({
                 kind: e.kind,
-                id: e.kind === "qq" ? (e.onlineId ?? "") : Number(e.onlineId),
+                id:
+                  e.kind === "qq" || e.kind === "bilibili" || e.kind === "navidrome"
+                    ? (e.onlineId ?? "")
+                    : Number(e.onlineId),
                 name: e.title,
                 artist: e.artist,
                 album: e.album,
@@ -684,7 +687,10 @@ export default function TrackList({
                 id:
                   onlineMenu.entry.kind === "qq" || onlineMenu.entry.kind === "bilibili"
                     ? (onlineMenu.entry.onlineId ?? "")
-                    : Number(onlineMenu.entry.onlineId),
+                    :
+                      onlineMenu.entry.kind === "navidrome"
+                        ? (onlineMenu.entry.onlineId ?? "")
+                        : Number(onlineMenu.entry.onlineId),
                 name: onlineMenu.entry.title,
                 artist: onlineMenu.entry.artist,
                 album: onlineMenu.entry.album,
@@ -714,7 +720,10 @@ export default function TrackList({
                 id:
                   onlineMenu.entry.kind === "qq" || onlineMenu.entry.kind === "bilibili"
                     ? (onlineMenu.entry.onlineId ?? "")
-                    : Number(onlineMenu.entry.onlineId),
+                    :
+                      onlineMenu.entry.kind === "navidrome"
+                        ? (onlineMenu.entry.onlineId ?? "")
+                        : Number(onlineMenu.entry.onlineId),
                 name: onlineMenu.entry.title,
                 artist: onlineMenu.entry.artist,
                 album: onlineMenu.entry.album,
