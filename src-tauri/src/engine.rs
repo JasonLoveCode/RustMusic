@@ -261,12 +261,8 @@ impl Engine {
                 // 当前有曲目：从 pos 处重建播放链。
                 // path 一律是本地路径（本地曲目或已缓存的在线音源文件）
                 if !info.path.is_empty() {
-                    match File::open(&info.path) {
-                        Ok(file) => {
-                            let src = Decoder::new(BufReader::new(file))
-                                .map_err(|e| format!("无法解码该音频文件: {e}"))?
-                                .convert_samples::<f32>()
-                                .skip_duration(Duration::from_millis(pos));
+                    match open_playable_source(&info.path, pos) {
+                        Ok(src) => {
                             let wrapped = EqSource::with_base(
                                 src,
                                 self.eq.clone(),
@@ -301,11 +297,9 @@ impl Engine {
 
     pub fn play_file(&self, info: TrackInfo) -> Result<(), String> {
         *self.want_url.write() = None;
-        // B 站 DASH 缓存（fragmented MP4）：rodio 的 symphonia 包装层初始化
-        // 会 panic，走 symphonia 直连源；独占模式的会话内 seek/重建不适用，跳过
-        let is_dash = info.kind == "bilibili" || is_fragmented_mp4(&info.path);
-        // WASAPI 独占模式（可选）：协商失败自动回退共享模式
-        if !is_dash && self.exclusive_enabled.load(Ordering::Relaxed) {
+        // WASAPI 独占模式（可选）：协商失败自动回退共享模式。
+        // DASH（B 站 fMP4）由 symdec 源按包 seek 支持，不再排除在独占之外
+        if self.exclusive_enabled.load(Ordering::Relaxed) {
             match self.start_exclusive(&info, 0) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -318,20 +312,21 @@ impl Engine {
                 }
             }
         }
-        // 独占会话会使共享输出流失效（设备被独占期间系统标记不可用），先重建
+        // 走到共享路径：若独占会话还在播放（上一首独占中 / 独占开关刚关），
+        // 必须先终止并等设备交还系统混音器——否则旧会话继续出声、
+        // 新共享流被独占压制无声（表现为"旧歌不停、新歌无声"）
+        if let Some(ctl) = self.excl.read().clone() {
+            let released = wasapi_out::wait_session_exit(&ctl, 2500);
+            if !released {
+                eprintln!("[engine] 切共享前独占会话未退出，设备可能仍被占用");
+            }
+            *self.excl.write() = None;
+            self.shared_broken.store(true, Ordering::Relaxed);
+        }
         if self.shared_broken.swap(false, Ordering::Relaxed) {
             self.rebuild_shared_output();
         }
-        let src: Box<dyn rodio::Source<Item = f32> + Send> = if is_dash {
-            Box::new(crate::symdec::SymphoniaSource::open(&info.path)?)
-        } else {
-            let file = File::open(&info.path).map_err(|e| format!("打开文件失败: {e}"))?;
-            Box::new(
-                Decoder::new(BufReader::new(file))
-                    .map_err(|e| format!("无法解码该音频文件: {e}"))?
-                    .convert_samples::<f32>(),
-            )
-        };
+        let src = open_playable_source(&info.path, 0)?;
         self.start(src, info)
     }
 
@@ -349,11 +344,9 @@ impl Engine {
                 }
             }
             *self.excl.write() = None;
-            let file = File::open(&info.path).map_err(|e| format!("打开文件失败: {e}"))?;
-            let src = Decoder::new(BufReader::new(file))
-                .map_err(|e| format!("无法解码该音频文件: {e}"))?
-                .convert_samples::<f32>()
-                .skip_duration(Duration::from_millis(skip_ms));
+            // DASH（B 站 fMP4）由 helper 走 symphonia 直连源（rodio 会 panic），
+            // 其余格式 rodio 解码 + skip_duration
+            let src = open_playable_source(&info.path, skip_ms)?;
             let wrapped =
                 EqSource::with_base(src, self.eq.clone(), self.pos_ms.clone(), skip_ms as f64);
             let params = wasapi_out::ExclusiveParams {
@@ -460,12 +453,7 @@ impl Engine {
                 if was_stopped {
                     return Ok(());
                 }
-                let file =
-                    File::open(&info.path).map_err(|e| format!("打开文件失败: {e}"))?;
-                let src = Decoder::new(BufReader::new(file))
-                    .map_err(|e| format!("无法解码该音频文件: {e}"))?
-                    .convert_samples::<f32>()
-                    .skip_duration(Duration::from_millis(pos));
+                let src = open_playable_source(&info.path, pos)?;
                 let wrapped =
                     EqSource::with_base(src, self.eq.clone(), self.pos_ms.clone(), pos as f64);
                 {
@@ -971,7 +959,17 @@ impl Engine {
                         if info.duration_ms == 0 {
                             info.duration_ms = probe_duration(&cache);
                         }
-                        let _ = engine.play_file(info);
+                        // 播放失败必须回报：此前静默吞噬，前端停在"播放中"
+                        // 却没有任何声音，用户无从得知原因
+                        if let Err(e) = engine.play_file(info) {
+                            let _ = app.emit(
+                                "download://progress",
+                                serde_json::json!({
+                                    "url": url, "done": true,
+                                    "error": format!("播放失败：{e}")
+                                }),
+                            );
+                        }
                     }
                     // 下载成功后按上限清理（跳过正在播放/下载中的文件）
                     engine.evict_cache();
@@ -1090,15 +1088,9 @@ fn probe_duration(path: &Path) -> u64 {
 
 /// 嗅探 MP4 族文件是否为 fragmented MP4（moov 携带 mvex，B 站 DASH 音频类）：
 /// rodio 的 symphonia 包装层对它初始化会 panic，必须走 symphonia 直连源。
-/// 只读文件头 64KB——fMP4 的 moov 紧跟 ftyp，mvex 必在前部；普通 m4a 没有 mvex。
+/// 不按扩展名预筛（缓存键扩展名取自 URL，可能任意）——直接读文件头 64KB，
+/// fMP4 的 moov 紧跟 ftyp，mvex 必在前部；普通 mp3/flac/m4a 没有 mvex
 fn is_fragmented_mp4(path: &str) -> bool {
-    let lower = path.to_lowercase();
-    if ![".m4s", ".m4a", ".mp4", ".m4b"]
-        .iter()
-        .any(|e| lower.ends_with(e))
-    {
-        return false;
-    }
     let Ok(mut f) = File::open(path) else {
         return false;
     };
@@ -1113,6 +1105,27 @@ fn sink_play_common(sink: &RwLock<Sink>, volume_bits: u32, speed_bits: u32) {
     s.set_volume(f32::from_bits(volume_bits));
     s.set_speed(f32::from_bits(speed_bits));
     s.play();
+}
+
+/// 按文件类型打开可播放采样源：fMP4（B 站 DASH 缓存）走 symphonia 直连源
+///（rodio 的 symphonia 包装层对它初始化会 panic），其余走 rodio 解码。
+/// skip_ms：fMP4 按包 seek 瞬时定位，其余 skip_duration。
+fn open_playable_source(
+    path: &str,
+    skip_ms: u64,
+) -> Result<Box<dyn rodio::Source<Item = f32> + Send>, String> {
+    if is_fragmented_mp4(path) {
+        return Ok(Box::new(crate::symdec::SymphoniaSource::open_at(
+            path, skip_ms,
+        )?));
+    }
+    let file = File::open(path).map_err(|e| format!("打开文件失败: {e}"))?;
+    Ok(Box::new(
+        Decoder::new(BufReader::new(file))
+            .map_err(|e| format!("无法解码该音频文件: {e}"))?
+            .convert_samples::<f32>()
+            .skip_duration(Duration::from_millis(skip_ms)),
+    ))
 }
 
 /// 下载 URL 到本地缓存文件，通过 download://progress 事件回报进度
