@@ -83,6 +83,7 @@ export default function TrackList({
   const playEntries = useStore((s) => s.playEntries);
   const entryToQueueItem = useStore((s) => s.entryToQueueItem);
   const toggleLikeOnline = useStore((s) => s.toggleLikeOnline);
+  const savedOnline = useStore((s) => s.savedOnline);
   const downloadOnline = useStore((s) => s.downloadOnline);
   const toggleLike = useStore((s) => s.toggleLike);
   const addToQueue = useStore((s) => s.addToQueue);
@@ -583,9 +584,16 @@ export default function TrackList({
                 vip: e.vip,
               })
             }
-            title="取消喜欢"
+            title={savedOnline[`${e.kind}-${e.onlineId}`] ? "取消喜欢" : "喜欢"}
           >
-            <Heart size={15} className="fill-[#e0533f] text-[#e0533f]" />
+            <Heart
+              size={15}
+              className={
+                savedOnline[`${e.kind}-${e.onlineId}`]
+                  ? "fill-[#e0533f] text-[#e0533f]"
+                  : "text-[var(--ink-3)] opacity-0 group-hover:opacity-100"
+              }
+            />
           </button>
           <button
             className="btn-ghost w-8 h-8"
