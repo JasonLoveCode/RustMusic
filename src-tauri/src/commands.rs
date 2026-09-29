@@ -570,6 +570,35 @@ pub async fn navidrome_stream_url(req: NdStreamReq) -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn navidrome_all_songs(
+    state: State<'_, AppState>,
+    server: String,
+    username: String,
+    offset: u64,
+) -> Result<serde_json::Value, String> {
+    let conn = state.db.lock();
+    let saved = db::get_setting(&conn, "navidrome_server").unwrap_or_default();
+    drop(conn);
+    let server = if server.is_empty() { saved } else { server };
+    let password = crate::navidrome::get_password_pub(&server, &username)?;
+    let v = crate::navidrome::search_all(&server, &username, &password, offset)?;
+    let empty = Vec::new();
+    let songs = v
+        .pointer("/subsonic-response/searchResult3/song")
+        .and_then(|x| x.as_array())
+        .unwrap_or(&empty);
+    let total = v
+        .pointer("/subsonic-response/searchResult3/total")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let list: Vec<crate::navidrome::NdSong> = songs
+        .iter()
+        .map(|s| crate::navidrome::song_from_pub(s, &server, &username, &password))
+        .collect();
+    Ok(json!({ "songs": list, "total": total }))
+}
+
+#[tauri::command]
 pub async fn navidrome_play(
     state: State<'_, AppState>,
     server: String,

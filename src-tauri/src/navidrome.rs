@@ -116,6 +116,32 @@ fn get_json(server: &str, username: &str, endpoint: &str, extra: &str) -> Result
 
 // ---------- 数据模型 ----------
 
+/// 全曲库分页（search3 空查询返回全部歌曲）
+pub fn search_all(
+    server: &str,
+    username: &str,
+    password: &str,
+    offset: u64,
+) -> Result<serde_json::Value, String> {
+    let extra = format!(
+        "query=&songCount=500&artistCount=0&albumCount=0&songOffset={offset}"
+    );
+    get_json(server, username, "search3", &extra)
+}
+
+pub fn get_password_pub(server: &str, username: &str) -> Result<String, String> {
+    get_password(server, username)
+}
+
+pub fn song_from_pub(
+    v: &serde_json::Value,
+    server: &str,
+    username: &str,
+    password: &str,
+) -> NdSong {
+    song_from(v, server, username, password)
+}
+
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct NdSong {

@@ -890,6 +890,9 @@ impl Engine {
             ("kugou", _, Some(kgid)) => format!("kug-{kgid}-{q}"),
             // B 站：qid 承载 "bvid-cid"，同一分P同一音质只缓存一份
             ("bilibili", _, Some(qid)) => format!("bili-{qid}-{q}"),
+            // Navidrome：qid 为歌曲 id（流地址里的 salt/token 每次都变，
+            // 不能按 URL 哈希，否则永远不命中缓存）
+            ("navidrome", _, Some(qid)) => format!("nd-{qid}-{q}"),
             // 自定义在线音源没有稳定 ID，仍按 URL 哈希
             _ => {
                 use std::hash::{Hash, Hasher};

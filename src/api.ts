@@ -276,6 +276,12 @@ export const api = {
     invoke<import("./types").NdAlbum[]>("navidrome_albums", { server, username }),
   navidromeSearch: (server: string, username: string, query: string) =>
     invoke<import("./types").NdSong[]>("navidrome_search", { server, username, query }),
+  navidromeAllSongs: (server: string, username: string, offset: number) =>
+    invoke<{ songs: import("./types").NdSong[]; total: number }>("navidrome_all_songs", {
+      server,
+      username,
+      offset,
+    }),
   navidromeAlbumSongs: (server: string, username: string, id: string) =>
     invoke<{ name: string; artist: string; songs: import("./types").NdSong[] }>(
       "navidrome_album_songs",

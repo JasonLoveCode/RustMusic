@@ -549,6 +549,7 @@ fn main() {
             commands::navidrome_search,
             commands::navidrome_albums,
             commands::navidrome_album_songs,
+            commands::navidrome_all_songs,
             commands::navidrome_play,
             commands::navidrome_lyric,
             commands::kugou_search,

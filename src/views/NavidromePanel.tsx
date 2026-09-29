@@ -21,6 +21,7 @@ const LS_USER = "navidrome.ui.username";
 
 type View =
   | { page: "albums" }
+  | { page: "songs" }
   | { page: "album"; id: string; name: string; artist: string }
   | { page: "search"; query: string };
 
@@ -37,6 +38,9 @@ export default function NavidromePanel() {
   const [albums, setAlbums] = useState<NdAlbum[]>([]);
   const [albumSongs, setAlbumSongs] = useState<NdSong[]>([]);
   const [loading, setLoading] = useState(false);
+  const [seg, setSeg] = useState<"albums" | "songs">("albums");
+  const [allSongs, setAllSongs] = useState<NdSong[]>([]);
+  const [total, setTotal] = useState(0);
 
   const [kw, setKw] = useState("");
   const [searched, setSearched] = useState(false);
@@ -58,6 +62,11 @@ export default function NavidromePanel() {
         if (!dead) {
           setAlbums(list);
           setConnected(true);
+          const r = await api.navidromeAllSongs(server, username, 0);
+          if (!dead) {
+            setAllSongs(r.songs);
+            setTotal(r.total);
+          }
         }
       } catch {
         /* 未连接或失效：保持连接表单 */
@@ -85,6 +94,13 @@ export default function NavidromePanel() {
       setServer(server.trim());
       setAlbums(list);
       setConnected(true);
+      try {
+        const r = await api.navidromeAllSongs(server.trim(), username.trim(), 0);
+        setAllSongs(r.songs);
+        setTotal(r.total);
+      } catch {
+        /* 全曲库拉取失败不阻塞连接 */
+      }
       setPassword("");
       setView({ page: "albums" });
       toast("Navidrome 已连接", "success");
@@ -149,6 +165,20 @@ export default function NavidromePanel() {
       setAlbumSongs(r);
       setView({ page: "search", query: q });
       setSearched(true);
+    } catch (e) {
+      toast(String(e), "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMoreSongs = async () => {
+    if (loading) return;
+    setLoading(true);
+    try {
+      const r = await api.navidromeAllSongs(server, username, allSongs.length);
+      setAllSongs((prev) => [...prev, ...r.songs]);
+      setTotal(r.total);
     } catch (e) {
       toast(String(e), "error");
     } finally {
@@ -277,6 +307,32 @@ export default function NavidromePanel() {
             </button>
           </div>
 
+          {/* 分段：专辑 / 歌曲 */}
+          <div className="flex items-center gap-1.5 mb-3 shrink-0">
+            {(
+              [
+                ["albums", `专辑 (${albums.length})`],
+                ["songs", `歌曲 (${total || allSongs.length})`],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => {
+                  setSeg(k);
+                  setView({ page: k });
+                  navStack.current = [];
+                }}
+                className={`px-3.5 py-1.5 rounded-full text-[12px] transition-colors ${
+                  seg === k
+                    ? "bg-[var(--accent-weak)] text-[var(--accent-strong)] font-medium"
+                    : "text-[var(--ink-2)] hover:bg-[var(--shade-hover)]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* 内容区 */}
           <div className="flex-1 min-h-0 overflow-y-auto" style={{ scrollbarWidth: "thin" }}>
             {loading && (
@@ -284,6 +340,70 @@ export default function NavidromePanel() {
                 <Loader2 size={15} className="animate-spin" />
                 加载中…
               </div>
+            )}
+            {!loading && view.page === "songs" && (
+              <>
+                <div className="pb-4">
+                  {allSongs.map((s) => (
+                    <div
+                      key={s.id}
+                      className="group grid grid-cols-[36px_minmax(0,1fr)_160px_70px_120px] items-center gap-4 h-[56px] px-3 rounded-[13px] hover:bg-[var(--shade-hover)] transition-colors"
+                      onDoubleClick={() => playSong(s)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenu({ x: e.clientX, y: e.clientY, song: s });
+                      }}
+                    >
+                      <button
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-[var(--ink-3)] group-hover:bg-[var(--accent)] group-hover:text-[var(--accent-on)] transition-colors"
+                        onClick={() => playSong(s)}
+                        title="播放"
+                      >
+                        <Play size={14} className="fill-current ml-px" />
+                      </button>
+                      <div className="min-w-0">
+                        <div className="text-[13.5px] text-[var(--ink)] truncate">{s.title}</div>
+                        <div className="text-[11.5px] text-[var(--ink-3)] truncate">{s.artist}</div>
+                      </div>
+                      <div className="text-[12.5px] text-[var(--ink-3)] truncate">{s.album}</div>
+                      <div className="text-[12.5px] text-[var(--ink-2)] tabular-nums text-right">
+                        {fmtTime(s.duration * 1000)}
+                      </div>
+                      <div className="flex items-center justify-end gap-1 pr-1">
+                        <button
+                          className="btn-ghost w-8 h-8"
+                          onClick={() => downloadSong(s)}
+                          title="下载到资料库"
+                        >
+                          <Download size={14} />
+                        </button>
+                        <button
+                          className="btn-ghost w-8 h-8"
+                          onClick={(ev) => {
+                            const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+                            setMenu({ x: r.right - 200, y: r.bottom + 4, song: s });
+                          }}
+                        >
+                          <MoreHorizontal size={16} className="opacity-0 group-hover:opacity-100" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                  {allSongs.length < total && (
+                    <div className="flex justify-center pt-2 pb-4">
+                      <button className="btn-secondary !py-1.5 !px-4" onClick={loadMoreSongs}>
+                        {loading ? <Loader2 size={13} className="animate-spin" /> : null}
+                        加载更多（{allSongs.length}/{total}）
+                      </button>
+                    </div>
+                  )}
+                  {!allSongs.length && (
+                    <div className="text-center text-[var(--ink-3)] text-[13px] pt-10">
+                      服务器曲库为空
+                    </div>
+                  )}
+                </div>
+              </>
             )}
             {!loading && view.page === "albums" && (
               <div className="grid grid-cols-4 gap-3.5 pb-4">
