@@ -149,63 +149,73 @@ fn parse_time_prefix(s: &str) -> Option<(u64, usize)> {
 pub fn yrc_to_enhanced_lrc(yrc: &str) -> Option<String> {
     let mut out = String::new();
     for line in yrc.lines() {
-        let line = line.trim();
+        let line = line.trim().trim_start_matches('\u{feff}');
         if line.is_empty() || line.starts_with('{') {
             // JSON 元数据行（v1 端点的 {"t":..,"c":[..]} 格式）不进歌词
             continue;
         }
-        let rest = line.strip_prefix('[')?;
-        let close = rest.find(']')?;
-        let header: Vec<&str> = rest[..close].split(',').collect();
-        if header.len() < 2 {
-            return None;
+        // 单行解析：任何畸形行（未闭合括号、非数字时间、纯文本行）只丢弃
+        // 该行——与 KRC 版行为一致，一行坏不拖累整首逐字歌词降级行级
+        if let Some(lrc) = yrc_line_to_enhanced(line) {
+            out.push_str(&lrc);
         }
-        let line_start: u64 = header[0].parse().ok()?;
-        let line_dur: u64 = header[1].parse().ok()?;
-        let line_end = line_start + line_dur;
-        let mut body = String::new();
-        let words = &rest[close + 1..];
-        // 游标扫描：每个 (...) 元组配它前面紧邻的文本段；
-        // 元组前无文本（起拍占位）则跳过该元组。
-        let mut cursor = 0usize;
-        let mut prev_end = line_start;
-        while let Some(rel) = words[cursor..].find('(') {
-            let lp = cursor + rel;
-            let text = words[cursor..lp].trim_start();
-            let rp = words[lp..].find(')')? + lp;
-            // 字元组 (start,dur[,ext...])：只取前两个，容忍第三参数
-            let times: Vec<&str> = words[lp + 1..rp].split(',').collect();
-            if times.len() < 2 {
-                return None;
-            }
-            let ws: u64 = times[0].parse().ok()?;
-            let wd: u64 = times[1].parse().ok()?;
-            if !text.is_empty() {
-                let cs = fmt_lrc_time(ws);
-                let ce = fmt_lrc_time(ws + wd);
-                body.push_str(&format!("<{cs}>{text}<{ce}>"));
-            }
-            prev_end = prev_end.max(ws + wd);
-            cursor = rp + 1;
-        }
-        // 行末尾巴字：最后一个元组之后仍残留的文本（它没有自己的元组），
-        // 区间 = [前一元组 end, 行 start+行 dur]
-        let tail = words[cursor..].trim_start();
-        if !tail.is_empty() && !body.is_empty() {
-            let cs = fmt_lrc_time(prev_end);
-            let ce = fmt_lrc_time(line_end.max(prev_end));
-            body.push_str(&format!("<{cs}>{tail}<{ce}>"));
-        }
-        if body.is_empty() {
-            continue;
-        }
-        let ls = fmt_lrc_time(line_start);
-        out.push_str(&format!("[{ls}]{body}\n"));
     }
     if out.is_empty() {
         return None;
     }
     Some(out)
+}
+
+/// 单条 yrc/QRC 歌词行 → 一行增强 LRC（含换行）；解析失败返回 None（跳过该行）
+fn yrc_line_to_enhanced(line: &str) -> Option<String> {
+    let rest = line.strip_prefix('[')?;
+    let close = rest.find(']')?;
+    let header: Vec<&str> = rest[..close].split(',').collect();
+    if header.len() < 2 {
+        return None;
+    }
+    let line_start: u64 = header[0].trim().parse().ok()?;
+    let line_dur: u64 = header[1].trim().parse().ok()?;
+    let line_end = line_start + line_dur;
+    let mut body = String::new();
+    let words = &rest[close + 1..];
+    // 游标扫描：每个 (...) 元组配它前面紧邻的文本段；
+    // 元组前无文本（起拍占位）则跳过该元组。
+    let mut cursor = 0usize;
+    let mut prev_end = line_start;
+    loop {
+        let Some(rel) = words[cursor..].find('(') else { break };
+        let lp = cursor + rel;
+        let text = words[cursor..lp].trim_start();
+        let rp = words[lp..].find(')')? + lp;
+        // 字元组 (start,dur[,ext...])：只取前两个，容忍第三参数
+        let times: Vec<&str> = words[lp + 1..rp].split(',').collect();
+        if times.len() < 2 {
+            return None;
+        }
+        let ws: u64 = times[0].trim().parse().ok()?;
+        let wd: u64 = times[1].trim().parse().ok()?;
+        if !text.is_empty() {
+            let cs = fmt_lrc_time(ws);
+            let ce = fmt_lrc_time(ws + wd);
+            body.push_str(&format!("<{cs}>{text}<{ce}>"));
+        }
+        prev_end = prev_end.max(ws + wd);
+        cursor = rp + 1;
+    }
+    // 行末尾巴字：最后一个元组之后仍残留的文本（它没有自己的元组），
+    // 区间 = [前一元组 end, 行 start+行 dur]
+    let tail = words[cursor..].trim_start();
+    if !tail.is_empty() && !body.is_empty() {
+        let cs = fmt_lrc_time(prev_end);
+        let ce = fmt_lrc_time(line_end.max(prev_end));
+        body.push_str(&format!("<{cs}>{tail}<{ce}>"));
+    }
+    if body.is_empty() {
+        return None;
+    }
+    let ls = fmt_lrc_time(line_start);
+    Some(format!("[{ls}]{body}\n"))
 }
 
 /// KRC（酷狗逐字歌词）→ 增强 LRC。KRC 行格式（解密解压后）：

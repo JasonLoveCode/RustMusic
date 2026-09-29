@@ -326,10 +326,6 @@ pub async fn play_track(state: State<'_, AppState>, id: i64) -> Result<(), Strin
         let conn = state.db.lock();
         db::get_track(&conn, id).ok_or("曲目不存在")?
     };
-    {
-        let conn = state.db.lock();
-        db::record_play(&conn, id);
-    }
     let local_quality = if meta.bit_depth >= 16 && meta.sample_rate >= 44100 {
         format!(
             "{}kHz/{}bit",
@@ -355,7 +351,13 @@ pub async fn play_track(state: State<'_, AppState>, id: i64) -> Result<(), Strin
         kgid: None,
         quality: (!local_quality.is_empty()).then_some(local_quality),
     };
-    engine_clone(&state).play_file(info)
+    let r = engine_clone(&state).play_file(info);
+    // 开播成功才计入播放次数/最近播放：文件损坏等播放失败不计
+    if r.is_ok() {
+        let conn = state.db.lock();
+        db::record_play(&conn, id);
+    }
+    r
 }
 
 /// 解析 B 站视频（链接 / BV 号 / av 号 / b23.tv 短链）并加入在线音源列表：
@@ -863,6 +865,56 @@ pub async fn bilibili_space_more(
     }))
 }
 
+/// 需要登录态的 B 站调用：取出 SESSDATA cookie，未登录报错
+fn bili_cookies_req(state: &State<'_, AppState>) -> Result<crate::bilibili::BiliCookies, String> {
+    let c = bili_cookies_opt(state).unwrap_or(crate::bilibili::BiliCookies {
+        sessdata: String::new(),
+        buvid3: String::new(),
+    });
+    if c.sessdata.is_empty() {
+        return Err("请先扫码登录 B 站账号".into());
+    }
+    Ok(c)
+}
+
+/// 登录用户创建的收藏夹列表（需 B 站登录；私密收藏夹一并可见）
+#[tauri::command]
+pub async fn bilibili_fav_folders(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let c = bili_cookies_req(&state)?;
+    let (user, folders) = tauri::async_runtime::spawn_blocking(move || {
+        crate::bilibili::fav_folders(&c)
+    })
+    .await
+    .map_err(|e| format!("收藏夹任务失败：{e}"))??;
+    Ok(json!({
+        "folders": folders,
+        "name": user.uname,
+        "face": user.face,
+    }))
+}
+
+/// 收藏夹内容列表（media_id + 页码；分页逻辑同合集）
+#[tauri::command]
+pub async fn bilibili_fav_list(
+    state: State<'_, AppState>,
+    media_id: i64,
+    pn: i64,
+) -> Result<serde_json::Value, String> {
+    let c = bili_cookies_req(&state)?;
+    let pn = pn.max(1) as u32;
+    let (rows, total, has_more) =
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::bilibili::fav_folder_videos(media_id, pn, &c)
+        })
+        .await
+        .map_err(|e| format!("收藏夹任务失败：{e}"))??;
+    Ok(json!({
+        "total": total,
+        "hasMore": has_more,
+        "items": space_items(rows, ""),
+    }))
+}
+
 /// 合集 / 系列视频列表第一页
 #[tauri::command]
 pub async fn bilibili_space_collection(
@@ -874,6 +926,11 @@ pub async fn bilibili_space_collection(
     let c = bili_cookies_opt(&state);
     let (rows, total, has_more) = match kind.as_str() {
         "season" => crate::bilibili::space_season_archives(&mid, id, 1, c.as_ref())?,
+        // "fav"：登录用户收藏夹（复用结果区 UI，id = media_id）
+        "fav" => {
+            let sess = bili_cookies_req(&state)?;
+            crate::bilibili::fav_folder_videos(id, 1, &sess)?
+        }
         _ => crate::bilibili::space_series_archives(&mid, id, 1, c.as_ref())?,
     };
     Ok(json!({
@@ -895,6 +952,10 @@ pub async fn bilibili_space_collection_more(
     let c = bili_cookies_opt(&state);
     let (rows, total, has_more) = match kind.as_str() {
         "season" => crate::bilibili::space_season_archives(&mid, id, pn.max(1) as u32, c.as_ref())?,
+        "fav" => {
+            let sess = bili_cookies_req(&state)?;
+            crate::bilibili::fav_folder_videos(id, pn.max(1) as u32, &sess)?
+        }
         _ => crate::bilibili::space_series_archives(&mid, id, pn.max(1) as u32, c.as_ref())?,
     };
     Ok(json!({
@@ -2834,12 +2895,15 @@ pub async fn download_update(
     url: String,
     name: String,
     size: u64,
+    digest: Option<String>,
 ) -> Result<String, String> {
     // 下载可能持续数分钟：放到阻塞线程池，避免占用异步运行时
-    tauri::async_runtime::spawn_blocking(move || updater::download(&app, &url, &name, size))
-        .await
-        .map_err(|e| format!("下载任务失败：{e}"))?
-        .map(|p| p.to_string_lossy().to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        updater::download(&app, &url, &name, size, digest.as_deref())
+    })
+    .await
+    .map_err(|e| format!("下载任务失败：{e}"))?
+    .map(|p| p.to_string_lossy().to_string())
 }
 
 /// 取消进行中的下载
