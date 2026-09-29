@@ -50,7 +50,7 @@ export default function NowPlaying() {
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   const lastActiveRef = useRef(-1);
 
-  // 歌词键：本地曲目 / 网易云 / QQ / 酷狗在线曲目
+  // 歌词键：本地曲目 / 网易云 / QQ / 酷狗 / Navidrome 在线曲目
   const lyricsKey =
     current?.kind === "track" && current.id != null
       ? `track-${current.id}`
@@ -62,7 +62,9 @@ export default function NowPlaying() {
             ? `kug-${current.kgid}`
             : current?.kind === "bilibili" && current.qid != null
               ? `bili-${current.qid}`
-              : null;
+              : current?.kind === "navidrome" && current.qid != null
+                ? `nd-${current.qid}`
+                : null;
 
   useEffect(() => {
     if (lyricsKey) {

@@ -324,6 +324,7 @@ pub fn lyrics(server: &str, username: &str, id: &str) -> Result<crate::models::L
     let base = norm_base(server);
 
     // 1) getLyricsBySongId
+    eprintln!("[nd-lyric] id={id}");
     let salt = rand_salt();
     let token = md5_hex(&format!("{password}{salt}"));
     let url = format!(
@@ -333,6 +334,7 @@ pub fn lyrics(server: &str, username: &str, id: &str) -> Result<crate::models::L
     );
     if let Ok(resp) = ureq::get(&url).timeout(TIMEOUT).call() {
         if let Ok(text) = resp.into_string() {
+            eprintln!("[nd-lyric] bySongId 响应: {}", text.chars().take(300).collect::<String>());
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                 let sl = v.pointer("/subsonic-response/lyricsList/structuredLyrics/0");
                 if let Some(sl) = sl {
@@ -383,6 +385,7 @@ pub fn lyrics(server: &str, username: &str, id: &str) -> Result<crate::models::L
         }
     }
 
+    eprintln!("[nd-lyric] bySongId 无歌词，走旧版回退");
     // 2) 旧版 getLyrics：需要歌手+曲名，先 getSong 拿元数据
     let salt = rand_salt();
     let token = md5_hex(&format!("{password}{salt}"));
@@ -409,6 +412,7 @@ pub fn lyrics(server: &str, username: &str, id: &str) -> Result<crate::models::L
                         );
                         if let Ok(lresp) = ureq::get(&lurl).timeout(TIMEOUT).call() {
                             if let Ok(ltext) = lresp.into_string() {
+                                eprintln!("[nd-lyric] getLyrics 响应: {}", ltext.chars().take(300).collect::<String>());
                                 if let Ok(lv) = serde_json::from_str::<serde_json::Value>(&ltext) {
                                     if let Some(value) =
                                         lv.pointer("/subsonic-response/lyrics/value").and_then(|x| x.as_str())
@@ -439,6 +443,37 @@ pub fn lyrics(server: &str, username: &str, id: &str) -> Result<crate::models::L
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn debug_real_lyrics() {
+        let db = std::path::PathBuf::from(std::env::var("APPDATA").unwrap())
+            .join("com.rustmusic.app")
+            .join("library.db");
+        let conn = rusqlite::Connection::open_with_flags(
+            &db,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let get = |k: &str| -> String {
+            conn.query_row("SELECT value FROM settings WHERE key = ?1", [k], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap_or_default()
+        };
+        let server = get("navidrome_server");
+        let username = get("navidrome_username");
+        println!("server={server} username={username}");
+        let payload = lyrics(&server, &username, "434ekWZclWOsrUJsxB2PSd").unwrap();
+        println!(
+            "payload: synced={} lines={}",
+            payload.synced,
+            payload.lines.len()
+        );
+        for l in payload.lines.iter().take(5) {
+            println!("  {:?}", l.text);
+        }
+    }
 
     #[test]
     fn norm_base_cases() {
