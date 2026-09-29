@@ -72,6 +72,7 @@ export default function TrackList({
 }: TrackListProps) {
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [pickerFor, setPickerFor] = useState<TrackMeta | null>(null);
+  const [pickerOnline, setPickerOnline] = useState<PlaylistEntryMeta | null>(null);
   const [onlineMenu, setOnlineMenu] = useState<{
     x: number;
     y: number;
@@ -699,6 +700,15 @@ export default function TrackList({
           <button
             className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
             onClick={() => {
+              setPickerOnline(onlineMenu.entry);
+              setOnlineMenu(null);
+            }}
+          >
+            <ListMusic size={13} /> 添加到播放列表…
+          </button>
+          <button
+            className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
+            onClick={() => {
               toggleLikeOnline({
                 kind: onlineMenu.entry.kind,
                 id:
@@ -772,6 +782,55 @@ export default function TrackList({
         </div>,
         document.body
       )}
+
+      {/* 在线条目添加到播放列表弹窗 */}
+      <Modal
+        open={!!pickerOnline}
+        onClose={() => setPickerOnline(null)}
+        title="添加到播放列表"
+        width={380}
+      >
+        <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto">
+          {playlists.map((p) => (
+            <button
+              key={p.id}
+              className="h-10 px-3 rounded-lg text-left text-[13px] text-[var(--ink)] hover:bg-[var(--shade)] flex items-center justify-between transition-colors"
+              onClick={async () => {
+                if (pickerOnline)
+                  await useStore
+                    .getState()
+                    .addOnlineToPlaylist(p.id, {
+                      kind: pickerOnline.kind,
+                      id: pickerOnline.onlineId ?? "",
+                      name: pickerOnline.title,
+                      artist: pickerOnline.artist,
+                      album: pickerOnline.album,
+                      cover: pickerOnline.cover,
+                      durationMs: Math.round(pickerOnline.duration * 1000),
+                      mediaMid: pickerOnline.mediaMid ?? "",
+                      vip: pickerOnline.vip ?? false,
+                    });
+                setPickerOnline(null);
+              }}
+            >
+              <span className="truncate">{p.name}</span>
+              <span className="text-[11px] text-[var(--ink-2)]">
+                {p.entries.length} 首
+              </span>
+            </button>
+          ))}
+          {!playlists.length && (
+            <div className="text-[12.5px] text-[var(--ink-2)] py-2">
+              还没有播放列表，请先在侧边栏创建
+            </div>
+          )}
+        </div>
+        <div className="flex justify-end mt-2">
+          <button className="btn-secondary" onClick={() => setPickerOnline(null)}>
+            关闭
+          </button>
+        </div>
+      </Modal>
 
       {/* 添加到播放列表弹窗 */}
       <Modal
