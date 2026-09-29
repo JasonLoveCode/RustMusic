@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowLeft,
+  Check,
   Download,
+  ListPlus,
   Loader2,
   LogIn,
   MoreHorizontal,
@@ -27,6 +29,11 @@ type View =
 
 export default function NavidromePanel() {
   const toast = useStore((s) => s.toast);
+  const playNext = useStore((s) => s.playNext);
+  const addToQueue = useStore((s) => s.addToQueue);
+  const toggleLikeOnline = useStore((s) => s.toggleLikeOnline);
+  const addOnlineToPlaylist = useStore((s) => s.addOnlineToPlaylist);
+  const playlists = useStore((s) => s.playlists);
 
   const [server, setServer] = useState(localStorage.getItem(LS_SERVER) ?? "");
   const [username, setUsername] = useState(localStorage.getItem(LS_USER) ?? "");
@@ -46,6 +53,7 @@ export default function NavidromePanel() {
   const [searched, setSearched] = useState(false);
 
   const [menu, setMenu] = useState<{ x: number; y: number; song: NdSong } | null>(null);
+  const [pickerSong, setPickerSong] = useState<NdSong | null>(null);
   const [downloading, setDownloading] = useState(false);
 
   const navStack = useRef<View[]>([]);
@@ -129,6 +137,19 @@ export default function NavidromePanel() {
 
   const playSong = (s: NdSong) => {
     if (!server || !username) return;
+    // 队列/收藏/播放列表都需要元数据缓存
+    useStore.setState((st) => ({
+      ndCache: {
+        ...st.ndCache,
+        [s.id]: {
+          title: s.title,
+          artist: s.artist,
+          album: s.album,
+          cover: s.coverUrl,
+          durationMs: s.duration * 1000,
+        },
+      },
+    }));
     api
       .navidromePlay(server, username, {
         id: s.id,
@@ -140,6 +161,34 @@ export default function NavidromePanel() {
       })
       .catch((e) => toast(String(e), "error"));
   };
+
+  const queueItemOf = (s: NdSong) => {
+    useStore.setState((st) => ({
+      ndCache: {
+        ...st.ndCache,
+        [s.id]: {
+          title: s.title,
+          artist: s.artist,
+          album: s.album,
+          cover: s.coverUrl,
+          durationMs: s.duration * 1000,
+        },
+      },
+    }));
+    return { kind: "navidrome" as const, id: s.id };
+  };
+
+  const likeRowOf = (s: NdSong) => ({
+    kind: "navidrome",
+    id: s.id,
+    name: s.title,
+    artist: s.artist,
+    album: s.album,
+    cover: s.coverUrl,
+    durationMs: s.duration * 1000,
+    mediaMid: "",
+    vip: false,
+  });
 
   const openAlbum = async (a: NdAlbum) => {
     navStack.current.push(view);
@@ -515,7 +564,7 @@ export default function NavidromePanel() {
           <div
             className="fixed z-[75] w-[190px] glass-strong rounded-xl p-1.5 shadow-2xl anim-menu"
             style={(() => {
-              const p = clampMenuPos(menu.x, menu.y, 190, 130);
+              const p = clampMenuPos(menu.x, menu.y, 190, 220);
               return { left: p.x, top: p.y };
             })()}
             onMouseDown={(e) => e.stopPropagation()}
@@ -533,6 +582,43 @@ export default function NavidromePanel() {
             <button
               className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
               onClick={() => {
+                playNext(queueItemOf(menu.song));
+                setMenu(null);
+              }}
+            >
+              <ListPlus size={13} /> 下一首播放
+            </button>
+            <button
+              className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
+              onClick={() => {
+                addToQueue(queueItemOf(menu.song));
+                setMenu(null);
+              }}
+            >
+              <ListPlus size={13} /> 加入队列
+            </button>
+            <div className="my-1 mx-2 border-t border-[var(--line)]" />
+            <button
+              className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
+              onClick={() => {
+                toggleLikeOnline(likeRowOf(menu.song));
+                setMenu(null);
+              }}
+            >
+              <Check size={13} /> 收藏到“我喜欢”
+            </button>
+            <button
+              className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
+              onClick={() => {
+                setPickerSong(menu.song);
+                setMenu(null);
+              }}
+            >
+              <ListPlus size={13} /> 添加到播放列表…
+            </button>
+            <button
+              className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
+              onClick={() => {
                 downloadSong(menu.song);
                 setMenu(null);
               }}
@@ -542,6 +628,40 @@ export default function NavidromePanel() {
           </div>,
           document.body
         )}
+
+      {/* 添加到播放列表 */}
+      {pickerSong && (
+        <Modal open onClose={() => setPickerSong(null)} title="添加到播放列表" width={380}>
+          <div className="flex flex-col gap-1.5 max-h-[260px] overflow-y-auto">
+            {playlists.map((p) => (
+              <button
+                key={p.id}
+                className="h-10 px-3 rounded-lg text-left text-[13px] text-[var(--ink)] hover:bg-[var(--shade)] flex items-center justify-between transition-colors"
+                onClick={async () => {
+                  await addOnlineToPlaylist(p.id, likeRowOf(pickerSong));
+                  toast(`已添加到「${p.name}」`, "success");
+                  setPickerSong(null);
+                }}
+              >
+                <span className="truncate">{p.name}</span>
+                <span className="text-[11px] text-[var(--ink-2)]">
+                  {p.entries.length} 首
+                </span>
+              </button>
+            ))}
+            {!playlists.length && (
+              <div className="text-[12.5px] text-[var(--ink-2)] py-2">
+                还没有播放列表，请先在侧边栏创建
+              </div>
+            )}
+          </div>
+          <div className="flex justify-end mt-2">
+            <button className="btn-secondary" onClick={() => setPickerSong(null)}>
+              关闭
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {/* 下载中提示 */}
       {downloading && (
