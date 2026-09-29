@@ -142,6 +142,9 @@ export default function App() {
   // 空格键 播放/暂停；L 切桌面歌词；Esc 退出全屏
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // 长按触发的 OS 键盘重复不响应：否则空格会以每秒几十次的频率
+      // 反复 togglePlay，L 反复开关桌面歌词窗口
+      if (e.repeat) return;
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (e.code === "Space") {

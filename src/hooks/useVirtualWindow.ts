@@ -19,7 +19,16 @@ export function useVirtualWindow(count: number, rowHeight: number, overscan = 8)
 
   const measure = useCallback(() => {
     const el = containerRef.current;
-    if (!el || count === 0) return;
+    if (!el) return;
+    if (count === 0) {
+      // 清空列表必须归零：保留旧 range 会留下 start×rowHeight 的空白
+      // spacer，把空态提示顶出可视区（count=0 后不再有滚动事件可自愈）
+      if (rangeRef.current.start !== 0 || rangeRef.current.end !== 0) {
+        rangeRef.current = { start: 0, end: 0 };
+        setRange({ start: 0, end: 0 });
+      }
+      return;
+    }
     const start = Math.max(0, Math.floor(el.scrollTop / rowHeight) - overscan);
     const end = Math.min(
       count,

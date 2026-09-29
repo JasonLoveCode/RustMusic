@@ -113,6 +113,8 @@ function Playhead({ fallbackTotal }: { fallbackTotal: number }) {
           useStore.setState({ scrubbing: true });
           seek(v);
         }}
+        // 拖动被系统中断：不 seek，松开 scrubbing 让引擎 pos 事件恢复回写
+        onCancel={() => useStore.setState({ scrubbing: false })}
         className="flex-1"
       />
       <span className="text-[11px] text-[var(--ink-3)] tabular-nums w-9">
@@ -170,6 +172,7 @@ function VolumePopover({
           className="relative w-1.5 rounded-full bg-[var(--shade-strong)] cursor-pointer touch-none"
           style={{ height: H }}
           onPointerDown={(e) => {
+            if (e.button !== 0) return;
             e.currentTarget.setPointerCapture(e.pointerId);
             onPointer(e);
           }}
@@ -177,6 +180,9 @@ function VolumePopover({
             if (e.buttons !== 1) return;
             onPointer(e);
           }}
+          // 右键松开 / 系统取消时释放 capture，避免 capture 残留
+          onPointerUp={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
+          onPointerCancel={(e) => e.currentTarget.releasePointerCapture(e.pointerId)}
         >
           <div
             className="absolute left-0 right-0 bottom-0 rounded-full"
@@ -572,8 +578,14 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
               speed !== 1 ? "!text-[var(--accent)]" : ""
             }`}
             onClick={() => {
+              // 持久化的倍速可能不在预设里（旧版本值/存储损坏）：indexOf=-1
+              // 会直接跳到 0.75x——顺延到比它大的最小预设，超过最大回最小档
               const i = SPEEDS.indexOf(speed);
-              setSpeed(SPEEDS[(i + 1) % SPEEDS.length]);
+              if (i >= 0) {
+                setSpeed(SPEEDS[(i + 1) % SPEEDS.length]);
+              } else {
+                setSpeed(SPEEDS.find((s) => s > speed) ?? SPEEDS[0]);
+              }
             }}
             title="播放速度"
           >

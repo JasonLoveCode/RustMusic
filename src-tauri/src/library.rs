@@ -23,12 +23,17 @@ pub fn is_audio(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// 规范化路径（去掉 Windows \\?\ 前缀），统一用反斜杠
+/// 规范化路径（去掉 Windows \\?\ 前缀），统一用反斜杠。
+/// 网络映射盘 canonicalize 后是 \\?\UNC\server\share\...，剥 \\?\ 会剩下
+/// 非法的 "UNC\server\share"（扫描打不开、静默 0 首）→ 还原成 \\server\share
 pub fn norm_path(p: &Path) -> String {
     let s = fs::canonicalize(p)
         .unwrap_or_else(|_| p.to_path_buf())
         .to_string_lossy()
         .into_owned();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
     s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 

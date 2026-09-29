@@ -387,6 +387,8 @@ export interface UpdateInfo {
   assetName: string;
   assetUrl: string;
   assetSize: number;
+  /** 附件 SHA-256（GitHub 返回 "sha256:<hex>"；缺省 = 无法校验） */
+  assetDigest: string | null;
   publishedAt: string;
 }
 

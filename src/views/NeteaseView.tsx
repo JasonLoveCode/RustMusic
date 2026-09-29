@@ -138,6 +138,8 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
   const navStack = useStore((s) => s.onlineNav[source]);
   const [qrSource, setQrSource] = useState<Source | null>(null);
   const [newPlName, setNewPlName] = useState("");
+  // “创建并添加”进行中：双击会创建两个同名歌单（后端不按名去重）
+  const [creatingPl, setCreatingPl] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importList, setImportList] = useState<
     { id: number | string; name: string; trackCount: number }[] | null
@@ -1389,13 +1391,19 @@ export default function OnlineLibraryView({ source }: { source: Source }) {
           />
           <button
             className="btn-secondary"
+            disabled={creatingPl}
             onClick={async () => {
-              if (!newPlName.trim() || !pickerRows?.length) return;
-              const pid = await createPlaylist(newPlName.trim());
-              if (pid >= 0) {
-                for (const r of pickerRows) {
-                  await addOnlineToPlaylist(pid, r);
+              if (creatingPl || !newPlName.trim() || !pickerRows?.length) return;
+              setCreatingPl(true);
+              try {
+                const pid = await createPlaylist(newPlName.trim());
+                if (pid >= 0) {
+                  for (const r of pickerRows) {
+                    await addOnlineToPlaylist(pid, r);
+                  }
                 }
+              } finally {
+                setCreatingPl(false);
               }
               setNewPlName("");
               setPickerRows(null);

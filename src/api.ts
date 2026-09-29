@@ -93,6 +93,13 @@ export const api = {
       "bilibili_space_collection_more",
       { mid, id, kind, pn }
     ),
+  /** 登录用户创建的收藏夹列表（含昵称/头像；kind "fav" 复用合集内容接口） */
+  biliFavFolders: () =>
+    invoke<{
+      folders: { id: number; title: string; total: number }[];
+      name: string;
+      face: string;
+    }>("bilibili_fav_folders"),
   /** 解析单个视频（当前结果展示，不落库），每分P一条 */
   biliVideoInfo: (input: string) =>
     invoke<BiliSpaceItem[]>("bilibili_video_info", { input }),
@@ -261,7 +268,7 @@ export const api = {
   /** 手动检查：有更新返回信息，已是最新返回 null */
   checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
   /** 下载安装包到临时目录，进度走 update://progress 事件，返回文件路径 */
-  downloadUpdate: (req: { url: string; name: string; size: number }) =>
+  downloadUpdate: (req: { url: string; name: string; size: number; digest: string | null }) =>
     invoke<string>("download_update", req),
   cancelUpdateDownload: () => invoke<void>("cancel_update_download"),
   /** 安装并重启应用（安装位置不变，安装完成后自动重启） */

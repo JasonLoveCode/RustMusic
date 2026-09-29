@@ -72,30 +72,46 @@ pub fn set_account(token: &str, userid: &str) {
     *REGISTERED_ACCOUNT.lock().unwrap() = (token.to_string(), userid.to_string());
 }
 
+/// 生成的 mid 缓存：可重置——服务端按 mid 记忆设备，空 dfid 重试
+/// 必须换全新 mid，OnceLock 永不重置会导致同一 mid 无限重试
+static GEN_MID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// 生成一个新 mid（32 位十六进制含连字符，转十进制大整数）
+fn generate_mid() -> String {
+    let mut rng = rand::thread_rng();
+    let uuid = (0..32)
+        .map(|i| {
+            if [8, 12, 16, 20].contains(&i) {
+                '-'
+            } else {
+                char::from(b'0' + rng.gen_range(0..16))
+            }
+        })
+        .collect::<String>();
+    let guid = md5_hex(&uuid);
+    BigUint::parse_bytes(guid.as_bytes(), 16)
+        .map(|n| n.to_string())
+        .unwrap_or(guid)
+}
+
 /// 当前 mid：优先用注入值；未注入时生成一次并缓存（与 dfid_of 同生命周期）
 fn mid_of() -> String {
     if let Some(m) = REGISTERED_MID.lock().unwrap().as_ref() {
         return m.clone();
     }
-    use std::sync::OnceLock;
-    static GEN: OnceLock<String> = OnceLock::new();
-    GEN.get_or_init(|| {
-        let mut rng = rand::thread_rng();
-        let uuid = (0..32)
-            .map(|i| {
-                if [8, 12, 16, 20].contains(&i) {
-                    '-'
-                } else {
-                    char::from(b'0' + rng.gen_range(0..16))
-                }
-            })
-            .collect::<String>();
-        let guid = md5_hex(&uuid);
-        BigUint::parse_bytes(guid.as_bytes(), 16)
-            .map(|n| n.to_string())
-            .unwrap_or(guid)
-    })
-    .clone()
+    let mut gen = GEN_MID.lock().unwrap();
+    if let Some(m) = gen.as_ref() {
+        return m.clone();
+    }
+    let m = generate_mid();
+    *gen = Some(m.clone());
+    m
+}
+
+/// 丢弃注入值与生成的 mid 缓存，下次 mid_of 生成全新值
+fn reset_mid() {
+    *REGISTERED_MID.lock().unwrap() = None;
+    *GEN_MID.lock().unwrap() = None;
 }
 
 /// 当前生效的 mid（命令层持久化用；与 dfid 配对）
@@ -135,6 +151,21 @@ fn re_register() -> Option<String> {
 /// 信息 JSON，URL 参数 p 为 RSA(PKCS1v1.5) 加密的会话串（aes key + uid + token），
 /// 响应体同为 AES 密文，解出 data.dfid。匿名（token 空）也可注册。
 pub fn register_dev() -> Result<String, String> {
+    // 服务端对已注册过的 mid 返回空 data：进程内有 dfid 缓存则复用；
+    // 缓存也没有（服务端记得此 mid，但本进程从未拿到过 dfid）→
+    // 换全新 mid 再试一次。最多重试一轮：mid 缓存已可重置，超过一轮
+    // 仍空 dfid 说明服务端异常，报错而非继续请求
+    for _ in 0..2 {
+        match register_dev_once()? {
+            Some(dfid) => return Ok(dfid),
+            None => reset_mid(),
+        }
+    }
+    Err("register_dev: 换新 mid 后服务端仍返回空 dfid".into())
+}
+
+/// 单次注册尝试；Ok(None) = 服务端认识该 mid 但未下发 dfid 且无缓存可复用
+fn register_dev_once() -> Result<Option<String>, String> {
     const RSA_N_HEX: &str = "c8006ed03842d2628209bd314984ca5ed6cfe06e30c95f9d4704d9c49791d7a935ba950ecb0bc8ebf5f5994f0bac927a7eb151b3c1de343303fa539c83136eccfd7d7e511e2dbce18eaa9f784c9b50d443e75865979e0a5e216e46c684066a8d6b998580bbaa22d73f5790286bb14742e83244e44db6d707ffe162c5c7002d45";
     const RSA_E: u32 = 65537;
     let (token, userid) = REGISTERED_ACCOUNT.lock().unwrap().clone();
@@ -210,16 +241,13 @@ pub fn register_dev() -> Result<String, String> {
     if let Some(d) = v.pointer("/data/dfid").and_then(|x| x.as_str()) {
         let dfid = d.to_string();
         *REGISTERED_DFID.lock().unwrap() = Some(dfid.clone());
-        return Ok(dfid);
+        return Ok(Some(dfid));
     }
-    // 同一 mid 重复注册时服务端返回空 data：复用进程内缓存的 dfid；
-    // 缓存也没有（服务端记得此 mid，但本进程从未拿到过 dfid）→
-    // 换新 mid 再注册一次（服务端按 mid 记忆设备）
+    // 同一 mid 重复注册时服务端返回空 data：复用进程内缓存的 dfid
     if let Some(d) = REGISTERED_DFID.lock().unwrap().as_ref() {
-        return Ok(d.clone());
+        return Ok(Some(d.clone()));
     }
-    *REGISTERED_MID.lock().unwrap() = None;
-    register_dev()
+    Ok(None)
 }
 
 /// AES-128-CBC 加密（PKCS7）
@@ -1101,11 +1129,13 @@ fn song_from_kmr(t: &serde_json::Value) -> Option<KgSong> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        // duration_128 单位是秒（搜索路径已 *1000），榜单接口同样要转毫秒
         duration_ms: t
             .pointer("/audio_info/duration_128")
             .and_then(|v| v.as_i64())
             .unwrap_or(0)
-            .max(0) as u64,
+            .max(0) as u64
+            * 1000,
         cover,
         vip: false,
         album_audio_id: t.get("album_audio_id").and_then(|v| v.as_u64()).unwrap_or(0),
@@ -1449,7 +1479,9 @@ pub fn user_playlists(token: &str, userid: &str) -> Result<Vec<KgUserPlaylist>, 
     }
     let mut out = Vec::new();
     let pagesize = 50i64;
-    for page in 1..=5i64 {
+    // 全量分页（同网易云版）：封顶 5 页会把 250 首之后的歌单静默截断。
+    // 加个上限防服务端异常时无限翻页
+    for page in 1..=100i64 {
         let body = serde_json::json!({
             "userid": userid.parse::<i64>().unwrap_or(0),
             "token": token,

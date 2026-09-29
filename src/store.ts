@@ -210,7 +210,7 @@ interface Store {
   /** 在线条目（网易云/QQ/酷狗）转可播放的队列项；无元数据时返回 null */
   entryToQueueItem(e: PlaylistEntryMeta): QueueItem | null;
   togglePlay(): void;
-  next(auto?: boolean, ended?: boolean): void;
+  next(auto?: boolean, ended?: boolean, bypassRepeatOne?: boolean): void;
   prev(): void;
   seek(ms: number): void;
   setScrubbing(v: boolean): void;
@@ -308,6 +308,11 @@ interface Store {
     kind: string,
     pn: number
   ): Promise<{ total: number; hasMore: boolean; items: import("./types").BiliSpaceItem[] }>;
+  biliFavFolders(): Promise<{
+    folders: { id: number; title: string; total: number }[];
+    name: string;
+    face: string;
+  }>;
   biliVideoInfo(input: string): Promise<import("./types").BiliSpaceItem[]>;
   setEq(gains: number[], enabled: boolean): void;
   clearCache(): Promise<void>;
@@ -362,7 +367,7 @@ interface Store {
     cover: string;
     durationMs: number;
     mediaMid?: string;
-  }): Promise<void>;
+  }): Promise<boolean>;
   refreshLikedOnline(): Promise<void>;
   refreshRecentOnline(): Promise<void>;
   addOnlineToPlaylist(
@@ -418,6 +423,26 @@ let toastSeq = 1;
 let unbinds: ListenerUnbind[] = [];
 let volumeTimer: ReturnType<typeof setTimeout> | null = null;
 let sleepTimerRef: ReturnType<typeof setTimeout> | null = null;
+/** 搜索请求代次（按源）：新请求使同源在途旧响应作废，防止旧响应后到覆盖新结果 */
+const searchGen: Record<"netease" | "qq" | "kugou", number> = {
+  netease: 0,
+  qq: 0,
+  kugou: 0,
+};
+/** 加载更多进行中标记（按源隔离：三源共享一把锁会让别源的 append 互相误清/重入） */
+const loadMoreBusy: Record<"netease" | "qq" | "kugou", boolean> = {
+  netease: false,
+  qq: false,
+  kugou: false,
+};
+/** set_eq IPC 防抖定时器 */
+let eqTimer: ReturnType<typeof setTimeout> | null = null;
+/** 下载串行队列：download://progress 是单通道事件、download 是单槽状态，
+ *  并发下载会互抢进度条，且同名文件并发写会损坏——排成队依次执行 */
+let downloadChain: Promise<void> = Promise.resolve();
+/** refreshLikedOnline 合并器（批量收藏并发触发时防旧快照覆盖新状态） */
+let likedRefreshInFlight = false;
+let likedRefreshDirty = false;
 /** 最近一次收到引擎进度帧的时间（看门狗判断引擎是否静默用） */
 let lastPosEventAt = 0;
 /** init 单例：React StrictMode 双挂载 / 并发调用时只注册一次事件监听 */
@@ -1320,7 +1345,9 @@ export const useStore = create<Store>((set, get) => ({
       // 一律以引擎的 player://nowplaying 事件为准。
       if (needRelogin) return;
       if (streak < queue.length) {
-        get().next(true);
+        // 失败自动跳歌必须绕过单曲循环：repeat-one 下 next(true) 会重播
+        // 刚失败的同一首，坏歌被反复重试直到 failStreak 追平队列长度
+        get().next(true, false, true);
       }
     };
     // 开播成功则清零连跳计数，并自愈清除本曲历史置灰标记
@@ -1441,7 +1468,9 @@ export const useStore = create<Store>((set, get) => ({
     const { current, queue, qIndex, tracks } = get();
     if (!current) {
       if (queue.length) {
-        get().playQueueIndex(qIndex);
+        // qIndex=-1（当前播放项刚被删除）时 playQueueIndex(-1) 会静默
+        // 返回，播放按钮彻底无响应——夹回 0 从队首开播
+        get().playQueueIndex(Math.max(0, qIndex));
       } else if (tracks.length) {
         get().playTracks(tracks, 0);
       }
@@ -1450,11 +1479,11 @@ export const useStore = create<Store>((set, get) => ({
     api.playPause().catch((e) => get().toast(String(e), "error"));
   },
 
-  next(auto = false, ended = false) {
+  next(auto = false, ended = false, bypassRepeatOne = false) {
     const { queue, qIndex, repeat, shuffle, current } = get();
     if (!queue.length) return;
 
-    if (auto && repeat === "one" && current) {
+    if (auto && repeat === "one" && !bypassRepeatOne && current) {
       // 单曲循环：重新播放当前曲目（qIndex 可能为 -1——当前项刚被删除，取 0）
       get().playQueueIndex(Math.max(0, qIndex));
       return;
@@ -1613,6 +1642,10 @@ export const useStore = create<Store>((set, get) => ({
     try {
       await api.desktopLyricsUnlock();
       set({ desktopLyricsLock: false });
+      // 后端只恢复了鼠标事件；歌词窗口的 locked 状态必须经事件同步，
+      // 否则窗口收得到点击但控制条/缩放手柄永不渲染（卡死在无 UI 状态）
+      const { emit } = await import("@tauri-apps/api/event");
+      await emit("dlyrics://lock", { locked: false });
     } catch {
       // 窗口可能已关闭：静默
     }
@@ -1902,6 +1935,10 @@ export const useStore = create<Store>((set, get) => ({
     return api.biliSpaceCollectionMore(mid, id, kind, pn);
   },
 
+  biliFavFolders() {
+    return api.biliFavFolders();
+  },
+
   biliVideoInfo(input) {
     return api.biliVideoInfo(input);
   },
@@ -1932,7 +1969,13 @@ export const useStore = create<Store>((set, get) => ({
 
   setEq(gains, enabled) {
     set({ eqGains: [...gains], eqEnabled: enabled });
-    api.setEq(gains, enabled).catch(() => {});
+    // 拖动滑块每个中间值都会调到这里：防抖 150ms 只发最后一帧，
+    // 避免一次拖动发几十次 set_eq IPC（后端每帧都要重算滤波器）
+    if (eqTimer) clearTimeout(eqTimer);
+    eqTimer = setTimeout(() => {
+      eqTimer = null;
+      api.setEq(gains, enabled).catch(() => {});
+    }, 150);
   },
 
   async clearCache() {
@@ -2001,12 +2044,19 @@ export const useStore = create<Store>((set, get) => ({
   async qqSearch(kw, append = false) {
     const keyword = kw.trim();
     if (!keyword) return;
-    if (append && get().loadMoreLock) return;
+    const gen = ++searchGen.qq;
+    if (append) {
+      if (loadMoreBusy.qq) return;
+      loadMoreBusy.qq = true;
+    } else {
+      // 新搜索会重置结果：同源在途 append 一并作废并解锁
+      loadMoreBusy.qq = false;
+    }
     set({ qqSearching: true, qqSearched: true });
     try {
-      if (append) set({ loadMoreLock: true });
       const page = append ? get().qqPage + 1 : 1;
       const r = await api.qqSearch(keyword, page);
+      if (gen !== searchGen.qq) return; // 已有更新的请求：丢弃旧响应
       const cache = { ...get().qqCache };
       for (const t of r.songs) cache[t.id] = t;
       set((s) => ({
@@ -2016,22 +2066,30 @@ export const useStore = create<Store>((set, get) => ({
         qqCache: cache,
       }));
     } catch (e) {
-      set({ qqSearching: false });
-      get().toast(String(e), "error");
+      if (gen === searchGen.qq) {
+        set({ qqSearching: false });
+        get().toast(String(e), "error");
+      }
     } finally {
-      set({ loadMoreLock: false });
+      if (append && gen === searchGen.qq) loadMoreBusy.qq = false;
     }
   },
 
   async kugouSearch(kw, append = false) {
     const keyword = kw.trim();
     if (!keyword) return;
-    if (append && get().loadMoreLock) return;
+    const gen = ++searchGen.kugou;
+    if (append) {
+      if (loadMoreBusy.kugou) return;
+      loadMoreBusy.kugou = true;
+    } else {
+      loadMoreBusy.kugou = false;
+    }
     set({ kugouSearching: true, kugouSearched: true });
     try {
-      if (append) set({ loadMoreLock: true });
       const page = append ? get().kugouPage + 1 : 1;
       const r = await api.kugouSearch(keyword, page);
+      if (gen !== searchGen.kugou) return;
       const cache = { ...get().kugouCache };
       for (const t of r.songs) cache[t.id] = t;
       set((s) => ({
@@ -2041,10 +2099,12 @@ export const useStore = create<Store>((set, get) => ({
         kugouCache: cache,
       }));
     } catch (e) {
-      set({ kugouSearching: false });
-      get().toast(String(e), "error");
+      if (gen === searchGen.kugou) {
+        set({ kugouSearching: false });
+        get().toast(String(e), "error");
+      }
     } finally {
-      set({ loadMoreLock: false });
+      if (append && gen === searchGen.kugou) loadMoreBusy.kugou = false;
     }
   },
 
@@ -2164,35 +2224,61 @@ export const useStore = create<Store>((set, get) => ({
     }
   },
 
-  async downloadOnline(row) {
-    get().toast("开始下载…", "info");
-    try {
-      const name = await api.downloadOnline({
-        kind: row.kind,
-        id: String(row.id),
-        title: row.name,
-        artist: row.artist,
-        album: row.album,
-        coverUrl: row.cover,
-        durationMs: row.durationMs,
-        mediaMid: row.mediaMid ?? "",
-      });
-      await get().refreshTracks();
-      get().toast(`已下载到资料库：${name}`, "success");
-    } catch (e) {
-      get().toast(String(e), "error");
-    }
+  downloadOnline(row) {
+    // 返回是否成功：批量下载靠它统计失败数（错误已 toast，不 reject）
+    const run = async (): Promise<boolean> => {
+      get().toast("开始下载…", "info");
+      try {
+        const name = await api.downloadOnline({
+          kind: row.kind,
+          id: String(row.id),
+          title: row.name,
+          artist: row.artist,
+          album: row.album,
+          coverUrl: row.cover,
+          durationMs: row.durationMs,
+          mediaMid: row.mediaMid ?? "",
+        });
+        await get().refreshTracks();
+        get().toast(`已下载到资料库：${name}`, "success");
+        return true;
+      } catch (e) {
+        get().toast(String(e), "error");
+        return false;
+      }
+    };
+    // 挂到串行链尾：批量下载逐个执行，进度条/文件写入不再互相干扰
+    const p = downloadChain.then(run, run);
+    downloadChain = p.then(
+      () => {},
+      () => {}
+    );
+    return p;
   },
 
   async refreshLikedOnline() {
+    // 批量收藏会并发触发 N 次本方法：并发快照乱序返回时，旧的会覆盖
+    // 新的 savedOnline（已成功的红心消失）。改为单飞行 + 脏标记：
+    // 飞行中的调用只标脏，循环保证最后一次刷新拿到的是最新全量快照
+    if (likedRefreshInFlight) {
+      likedRefreshDirty = true;
+      return;
+    }
+    likedRefreshInFlight = true;
     try {
-      const list = await api.likedOnlineList();
-      const saved: Record<string, boolean> = {};
-      for (const e of list) {
-        if (e.onlineId) saved[`${e.kind}-${e.onlineId}`] = true;
-      }
-      set({ likedOnline: list, savedOnline: { ...saved } });
-    } catch {}
+      do {
+        likedRefreshDirty = false;
+        const list = await api.likedOnlineList();
+        const saved: Record<string, boolean> = {};
+        for (const e of list) {
+          if (e.onlineId) saved[`${e.kind}-${e.onlineId}`] = true;
+        }
+        set({ likedOnline: list, savedOnline: { ...saved } });
+      } while (likedRefreshDirty);
+    } catch {
+    } finally {
+      likedRefreshInFlight = false;
+    }
   },
 
   async refreshRecentOnline() {
@@ -2367,12 +2453,18 @@ export const useStore = create<Store>((set, get) => ({
   async neteaseSearch(kw, append = false) {
     const keyword = kw.trim();
     if (!keyword) return;
-    if (append && get().loadMoreLock) return;
+    const gen = ++searchGen.netease;
+    if (append) {
+      if (loadMoreBusy.netease) return;
+      loadMoreBusy.netease = true;
+    } else {
+      loadMoreBusy.netease = false;
+    }
     set({ neteaseSearching: true, neteaseSearched: true });
     try {
-      if (append) set({ loadMoreLock: true });
       const offset = append ? get().neteaseResults.length : 0;
       const r = await api.neteaseSearch(keyword, offset);
+      if (gen !== searchGen.netease) return;
       const cache = { ...get().neteaseCache };
       for (const t of r.songs) cache[t.id] = t;
       set((s) => ({
@@ -2382,10 +2474,12 @@ export const useStore = create<Store>((set, get) => ({
         neteaseCache: cache,
       }));
     } catch (e) {
-      set({ neteaseSearching: false });
-      get().toast(String(e), "error");
+      if (gen === searchGen.netease) {
+        set({ neteaseSearching: false });
+        get().toast(String(e), "error");
+      }
     } finally {
-      set({ loadMoreLock: false });
+      if (append && gen === searchGen.netease) loadMoreBusy.netease = false;
     }
   },
 
@@ -2473,7 +2567,11 @@ export const useStore = create<Store>((set, get) => ({
         pushDesktopLyrics(get());
       }
     } catch {
-      if (get().lyricsFor === key) set({ lyricsLoading: false, lyrics: null });
+      // lyricsFor 一并清空：留着 key 会把后续所有重试拦在
+      // "if (get().lyricsFor === key) return" 上——一次网络抖动，
+      // 这首歌的歌词直到切歌都出不来
+      if (get().lyricsFor === key)
+        set({ lyricsLoading: false, lyrics: null, lyricsFor: null });
     }
   },
 

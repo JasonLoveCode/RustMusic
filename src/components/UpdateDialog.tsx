@@ -64,6 +64,7 @@ const useUpdateStore = create<UpdateStore>()((set, get) => ({
         url: info.assetUrl,
         name: info.assetName,
         size: info.assetSize,
+        digest: info.assetDigest ?? null,
       });
       // 确认后才退出应用：进入安装阶段，进程即将被安装程序接管
       set({ phase: "installing" });

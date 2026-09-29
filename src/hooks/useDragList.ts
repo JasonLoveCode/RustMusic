@@ -43,6 +43,9 @@ export function useDragList(onSubmit: (from: number, to: number) => void) {
     scroll0: 0,
     scrollDir: 0,
     container: null as HTMLElement | null,
+    /** 自动滚动目标：行容器的最近可滚动祖先（侧边栏歌单的行容器
+     *  自身不滚动，滚动的是外层 overflow-y-auto）；空 = 用 container */
+    scrollEl: null as HTMLElement | null,
     rows: [] as HTMLElement[],
     tops: [] as number[],
     rowH: 48,
@@ -104,7 +107,7 @@ export function useDragList(onSubmit: (from: number, to: number) => void) {
     // 每帧：跟随指针 + 槽位计算 + 让位平移（幂等重写）+ 边缘自动滚动
     const frame = () => {
       st.raf = requestAnimationFrame(frame);
-      const c = st.container;
+      const c = st.scrollEl ?? st.container;
       if (!c || !st.dragging) return;
       if (st.scrollDir !== 0) c.scrollTop += st.scrollDir;
       // 容器滚动时内容整体位移，被拖行要贴住指针：补偿滚动量。
@@ -144,9 +147,27 @@ export function useDragList(onSubmit: (from: number, to: number) => void) {
       st.tops = tops;
       st.rowH = rowH;
       st.container = container;
-      st.from = st.pressedIndex;
-      st.to = st.pressedIndex;
-      st.scroll0 = container.scrollTop;
+      // 自动滚动目标：容器自身不可滚动时向上找最近的滚动祖先
+      //（侧边栏歌单的行容器不滚，滚动的是外层 overflow-y-auto；
+      // 找不到则置空——边缘自动滚动自然不生效，不会误滚别的容器）
+      let sc: HTMLElement | null = container;
+      while (
+        sc &&
+        sc.scrollHeight <= sc.clientHeight + 1 &&
+        sc.parentElement &&
+        sc.parentElement !== document.body
+      ) {
+        sc = sc.parentElement;
+      }
+      st.scrollEl = sc && sc.scrollHeight > sc.clientHeight + 1 ? sc : null;
+      // pressedIndex 是按下瞬间的行序：若上一次拖拽的延迟提交（150ms）
+      // 在按下后、进入拖拽前已重排 DOM，该序号指向的是另一行——按元素
+      // 重查索引，保证幽灵样式、移动与 onSubmit 都作用在用户按下的行上
+      const idx = rows.indexOf(row);
+      if (idx < 0) return;
+      st.from = idx;
+      st.to = idx;
+      st.scroll0 = (st.scrollEl ?? container).scrollTop;
       st.dragging = true;
       document.body.classList.add("dragging-rows");
       for (const r of rows) {

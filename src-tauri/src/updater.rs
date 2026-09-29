@@ -35,6 +35,8 @@ pub struct UpdateInfo {
     pub asset_name: String,
     pub asset_url: String,
     pub asset_size: u64,
+    /// 附件哈希（GitHub 返回 "sha256:<hex>"；缺省 = 无法校验，仅剩大小检查）
+    pub asset_digest: Option<String>,
     pub published_at: String,
 }
 
@@ -60,7 +62,7 @@ fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 /// 从 release 附件里挑 Windows 安装包：优先 *setup*.exe（Inno 安装包），其次任意 .exe
-fn pick_setup_asset(assets: &[serde_json::Value]) -> Option<(String, String, u64)> {
+fn pick_setup_asset(assets: &[serde_json::Value]) -> Option<(String, String, u64, Option<String>)> {
     let mut fallback = None;
     for a in assets {
         let (Some(name), Some(url)) = (a["name"].as_str(), a["browser_download_url"].as_str())
@@ -75,6 +77,7 @@ fn pick_setup_asset(assets: &[serde_json::Value]) -> Option<(String, String, u64
             name.to_string(),
             url.to_string(),
             a["size"].as_u64().unwrap_or(0),
+            a["digest"].as_str().map(|s| s.to_string()),
         );
         if lower.contains("setup") {
             return Some(item);
@@ -123,7 +126,7 @@ pub fn fetch_latest(current_version: &str) -> Result<Option<UpdateInfo>, String>
     let assets = release["assets"]
         .as_array()
         .ok_or_else(|| "发布信息缺少附件".to_string())?;
-    let (asset_name, asset_url, asset_size) = pick_setup_asset(assets)
+    let (asset_name, asset_url, asset_size, asset_digest) = pick_setup_asset(assets)
         .ok_or_else(|| format!("新版本 {tag} 未提供 Windows 安装包，请到 GitHub 发布页手动下载"))?;
 
     Ok(Some(UpdateInfo {
@@ -135,6 +138,7 @@ pub fn fetch_latest(current_version: &str) -> Result<Option<UpdateInfo>, String>
         asset_name,
         asset_url,
         asset_size,
+        asset_digest,
         published_at: release["published_at"]
             .as_str()
             .unwrap_or_default()
@@ -143,13 +147,17 @@ pub fn fetch_latest(current_version: &str) -> Result<Option<UpdateInfo>, String>
 }
 
 /// 下载安装包到临时目录，期间通过 `update://progress` 事件上报进度。
-/// 返回下载文件的完整路径。文件大小与 release 附件声明的 size 校验一致。
+/// 返回下载文件的完整路径。校验：文件大小与声明一致；声明了 SHA-256
+///（GitHub 附件 digest，形如 "sha256:<hex>"）时逐块计算并比对——
+/// 校验通过才允许进入静默安装，摘要不符视为下载被篡改/损坏。
 pub fn download(
     app: &AppHandle,
     url: &str,
     name: &str,
     expected_size: u64,
+    expected_digest: Option<&str>,
 ) -> Result<PathBuf, String> {
+    use sha2::Digest as _;
     DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
     // 附件名固定为 RustMusic_*-setup.exe，仅允许常规文件名字符，避免拼进脚本出问题
     let safe_name: String = name
@@ -180,6 +188,7 @@ pub fn download(
 
     let mut buf = [0u8; 64 * 1024];
     let mut received: u64 = 0;
+    let mut hasher = sha2::Sha256::new();
     let mut last_emit = Instant::now() - Duration::from_secs(1);
     loop {
         if DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
@@ -190,6 +199,7 @@ pub fn download(
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
+                hasher.update(&buf[..n]);
                 file.write_all(&buf[..n])
                     .map_err(|e| format!("写入安装包失败：{e}"))?;
                 received += n as u64;
@@ -214,6 +224,15 @@ pub fn download(
     if total > 0 && received != total {
         let _ = std::fs::remove_file(&path);
         return Err("下载不完整，请重试".into());
+    }
+    if let Some(d) = expected_digest {
+        let expected = d.trim().to_lowercase();
+        let expected = expected.strip_prefix("sha256:").unwrap_or(&expected);
+        let actual = hex::encode(hasher.finalize());
+        if !expected.is_empty() && actual != expected {
+            let _ = std::fs::remove_file(&path);
+            return Err("安装包校验失败（SHA-256 不符），已删除下载文件".into());
+        }
     }
     Ok(path)
 }

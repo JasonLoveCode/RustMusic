@@ -5,6 +5,8 @@ interface SliderProps {
   max: number;
   onChange?: (v: number) => void;
   onCommit?: (v: number) => void;
+  /** 拖动被系统中断（pointercancel）时回调：调用方借此复位拖动期状态 */
+  onCancel?: () => void;
   className?: string;
   /** 轨道高度 px */
   thick?: number;
@@ -17,6 +19,7 @@ export default function Slider({
   max,
   onChange,
   onCommit,
+  onCancel,
   className = "",
   thick = 4,
   showThumb = "hover",
@@ -45,7 +48,7 @@ export default function Slider({
       ref={ref}
       className={`group relative flex items-center ${disabled ? "pointer-events-none opacity-50" : "cursor-pointer"} ${className}`}
       onPointerDown={(e) => {
-        if (disabled || max <= 0) return;
+        if (disabled || max <= 0 || e.button !== 0) return;
         e.currentTarget.setPointerCapture(e.pointerId);
         setDragging(true);
         const v = posToValue(e.clientX);
@@ -64,6 +67,21 @@ export default function Slider({
         const v = posToValue(e.clientX);
         onChange?.(v);
         onCommit?.(v);
+      }}
+      // 拖动中 Alt-Tab / 系统手势 / 触摸取消触发 pointercancel（不会来
+      // pointerup）：不复位的话 dragging 永久卡 true——之后鼠标不按键划过
+      // 也会持续 onChange，scrubbing 卡死导致进度条冻结。中断即放弃预览值，
+      // 回落到受控 value（不 commit 中途的拖动）
+      onPointerCancel={() => {
+        if (!dragging) return;
+        setDragging(false);
+        onCancel?.();
+      }}
+      // 兜底：某些取消路径只发 lostpointercapture 不发 pointercancel
+      onLostPointerCapture={() => {
+        if (!dragging) return;
+        setDragging(false);
+        onCancel?.();
       }}
     >
       <div

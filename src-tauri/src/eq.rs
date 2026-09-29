@@ -151,7 +151,11 @@ impl<S: Source<Item = f32>> EqSource<S> {
             self.coeffs = (0..10)
                 .map(|i| design_band(i, self.sr, gains[i] as f64))
                 .collect();
-            self.states = vec![vec![Biquad::default(); 10]; self.channels];
+            // 只换系数、保留滤波器状态：播放中拖动滑块时每个中间增益都会
+            // 走到这里，清零状态会丢弃滤波器记忆产生输出跳变（咔哒声）
+            if self.states.len() != self.channels {
+                self.states = vec![vec![Biquad::default(); 10]; self.channels];
+            }
             self.ver = v;
         }
     }

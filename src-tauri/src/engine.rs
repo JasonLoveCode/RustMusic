@@ -609,14 +609,17 @@ impl Engine {
     }
 
     pub fn stop(&self) {
+        // 先置 stopped 再停流：monitor 判定"自然播完"要求 !stopped，
+        // 若先停流（is_active 变 false）后置 stopped，120ms tick 恰好
+        // 采样在两步之间会误发 player://ended → 前端自动切歌
+        self.stopped.store(true, Ordering::Relaxed);
+        self.user_paused.store(false, Ordering::Relaxed);
+        self.pos_ms.store(0, Ordering::Relaxed);
         if self.excl_active() {
             if let Some(ctl) = self.excl.read().as_ref() {
                 ctl.stop.store(true, Ordering::Relaxed);
                 ctl.active.store(false, Ordering::Relaxed);
             }
-            self.user_paused.store(false, Ordering::Relaxed);
-            self.stopped.store(true, Ordering::Relaxed);
-            self.pos_ms.store(0, Ordering::Relaxed);
             self.notify_smtc();
             self.emit_state(false);
             return;
@@ -624,9 +627,6 @@ impl Engine {
         let sink = self.sink.read();
         sink.stop();
         drop(sink);
-        self.stopped.store(true, Ordering::Relaxed);
-        self.user_paused.store(false, Ordering::Relaxed);
-        self.pos_ms.store(0, Ordering::Relaxed);
         self.notify_smtc();
         self.emit_state(false);
     }

@@ -415,7 +415,9 @@ export default function TrackList({
           ? current?.kind === "kugou" && current.kgid === e.onlineId
           : e.kind === "bilibili"
             ? current?.kind === "bilibili" && current.qid === e.onlineId
-            : current?.kind === "netease" && current.nid === Number(e.onlineId);
+            : e.kind === "navidrome"
+              ? current?.kind === "navidrome" && current.qid === e.onlineId
+              : current?.kind === "netease" && current.nid === Number(e.onlineId);
     // 播放失败（无版权/下架）：整行置灰 + 无版权标记（key 与 store unavailable 一致）
     const failKey = `${e.kind}:${e.onlineId}`;
     const dead = unavailable[failKey] != null;
@@ -651,7 +653,17 @@ export default function TrackList({
           <button
             className="w-full h-8 px-2.5 rounded-lg flex items-center gap-2.5 text-[12.5px] text-[var(--ink)] hover:bg-[var(--shade-strong)] text-left"
             onClick={() => {
-              const idx = Math.max(0, onlineEntries.indexOf(onlineMenu.entry));
+              // 不用对象身份 indexOf：菜单开着时后台扫描刷新列表会替换
+              // 行对象，indexOf 得 -1 → Math.max(0,-1)=0 实际播了第一首。
+              // 按 kind+onlineId 身份定位
+              const idx = Math.max(
+                0,
+                onlineEntries.findIndex(
+                  (x) =>
+                    x.kind === onlineMenu.entry.kind &&
+                    x.onlineId === onlineMenu.entry.onlineId
+                )
+              );
               playEntries(onlineEntries, idx);
               setOnlineMenu(null);
             }}

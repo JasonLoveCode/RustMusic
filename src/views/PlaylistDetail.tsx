@@ -75,6 +75,17 @@ type DetailRow =
       cover: string;
       durationMs: number;
       liked: boolean;
+    }
+  | {
+      entry: PlaylistEntryMeta;
+      kind: "navidrome";
+      id: string;
+      name: string;
+      artist: string;
+      album: string;
+      cover: string;
+      durationMs: number;
+      liked: boolean;
     };
 
 export default function PlaylistDetail({ id }: { id: number }) {
@@ -155,6 +166,14 @@ export default function PlaylistDetail({ id }: { id: number }) {
             kind: "bilibili",
             id: e.onlineId ?? "",
             liked: !!savedOnline[`bilibili-${e.onlineId}`],
+          };
+        }
+        if (e.kind === "navidrome") {
+          return {
+            ...base,
+            kind: "navidrome",
+            id: e.onlineId ?? "",
+            liked: !!savedOnline[`navidrome-${e.onlineId}`],
           };
         }
         return {
@@ -331,7 +350,9 @@ export default function PlaylistDetail({ id }: { id: number }) {
                     ? current.qid === r.id
                     : r.kind === "netease"
                       ? current.nid === r.id
-                      : current.id === r.id);
+                      : r.kind === "kugou"
+                        ? current.kgid === r.id
+                        : current.qid === r.id);
                 // 播放失败（无版权/下架等）：整行置灰 + 无版权标记
                 const dead =
                   r.kind !== "track" &&
@@ -396,7 +417,11 @@ export default function PlaylistDetail({ id }: { id: number }) {
                                 ? "网易云"
                                 : r.kind === "kugou"
                                   ? "酷狗"
-                                  : "QQ音乐"}
+                                  : r.kind === "bilibili"
+                                    ? "B站"
+                                    : r.kind === "navidrome"
+                                      ? "Navidrome"
+                                      : "QQ音乐"}
                             </span>
                           )}
                           {r.kind !== "track" && r.entry.vip && !dead && (

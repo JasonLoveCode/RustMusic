@@ -91,6 +91,28 @@ function DesktopLyrics() {
     };
   }, []);
 
+  // 主窗口按 L 解锁：后端只恢复鼠标事件，不通知本窗口——锁定后 🔒 按钮自身
+  // 不可点，这条事件是恢复 locked 状态（控制条/缩放手柄）的唯一途径。
+  // 本窗口 toggleLock 发出的同名事件也会到达这里，值一致，无副作用
+  useEffect(() => {
+    let disposed = false;
+    let un: (() => void) | undefined;
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      if (disposed) return;
+      return listen<{ locked: boolean }>("dlyrics://lock", (e) => {
+        if (e.payload.locked) setHover(false);
+        setLocked(e.payload.locked);
+      });
+    }).then((u) => {
+      if (disposed) u?.();
+      else un = u as unknown as (() => void) | undefined;
+    });
+    return () => {
+      disposed = true;
+      un?.();
+    };
+  }, []);
+
   // 窗口尺寸监听（缩放 → 字号基准）
   useEffect(() => {
     let disposed = false;

@@ -49,6 +49,9 @@ export default function NowPlaying() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
   const lastActiveRef = useRef(-1);
+  // 单帧渲染函数（rAF tick 主体）：暂停中循环不跑，点歌词行 seek 后
+  // 手动调一次让高亮/染色立即跟上
+  const renderFrameRef = useRef<() => void>(() => {});
 
   // 歌词键：本地曲目 / 网易云 / QQ / 酷狗 / Navidrome 在线曲目
   const lyricsKey =
@@ -85,12 +88,11 @@ export default function NowPlaying() {
   );
 
   // 逐帧驱动：外推进度 → 定位当前行 → 行样式直接写 DOM。
-  // 播放中才跑循环（暂停时染色冻结，不空转——同桌面歌词）
+  // 播放中才跑循环（暂停时染色冻结，不空转——同桌面歌词），
+  // 但 tick 主体保留为单帧渲染入口（暂停点歌词行用）
   useEffect(() => {
-    if (!playing || !syncedLines.length) return;
-    let raf = 0;
+    if (!syncedLines.length) return;
     const tick = () => {
-      raf = requestAnimationFrame(tick);
       const a = anchorRef.current;
       // 外推封顶在曲目时长：托盘挂起恢复后锚点时间戳涵盖整段挂起时长，
       // 不封顶的话进度/歌词会瞬间冲到很远（表现为“没声音但歌词狂飙”）
@@ -172,7 +174,14 @@ export default function NowPlaying() {
         el.style.setProperty("--fill", `${(fill * 100).toFixed(2)}%`);
       }
     };
-    raf = requestAnimationFrame(tick);
+    renderFrameRef.current = tick;
+    if (!playing) return;
+    let raf = 0;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      tick();
+    };
+    raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
   }, [syncedLines, playing]);
 
@@ -580,7 +589,12 @@ export default function NowPlaying() {
                   ref={(el) => {
                     lineRefs.current[i] = el;
                   }}
-                  onClick={() => l.timeMs != null && seek(l.timeMs)}
+                  onClick={() => {
+                    if (l.timeMs == null) return;
+                    seek(l.timeMs);
+                    // 暂停中 rAF 循环不在跑：手动渲染一帧，高亮/染色立即跟上
+                    renderFrameRef.current();
+                  }}
                   className="lyric-line lyric-fill px-4 py-[9px] text-center cursor-pointer"
                 >
                   {text}

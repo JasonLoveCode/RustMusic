@@ -104,22 +104,31 @@ impl SymphoniaSource {
         };
         // seek：丢弃时间戳早于目标的包（纯 demux，不解码）
         if skip_ms > 0 {
+            let mut landed_ms: Option<u64> = None;
             loop {
                 let ts = match src.format.next_packet() {
                     Ok(p) if p.track_id() == src.track_id => p.ts(),
                     Ok(_) => continue, // 非音轨包，跳过
                     Err(_) => break,   // 到末尾
                 };
-                let packet_ms = src
+                // 毫秒要含亚秒部分：seconds*1000 会丢掉 <1s 的差异，
+                // skip_ms 落在包间隙时误跳到下一包（~1s 误差）。
+                // 直接 ts × numer × 1000 / denom，u128 防溢出
+                let ms = src
                     .time_base
-                    .map(|tb| tb.calc_time(ts).seconds as u64 * 1000)
+                    .map(|tb| ((ts as u128 * tb.numer as u128 * 1000) / tb.denom as u128) as u64)
                     .unwrap_or(u64::MAX);
-                if packet_ms >= skip_ms {
+                if ms >= skip_ms {
+                    landed_ms = Some(ms);
                     break;
                 }
             }
-            // frames_out 从跳过位置起算（引擎侧 EqSource 以 skip_ms 为基准偏移）
-            src.frames_out = skip_ms * src.sample_rate as u64 / 1000;
+            // frames_out 按实际落点（首个保留包的时间戳）起算：
+            // 引擎报告的播放位置才与真实音频位置对齐（理想 skip_ms 有偏差）
+            src.frames_out = match landed_ms {
+                Some(ms) => ms * src.sample_rate as u64 / 1000,
+                None => skip_ms * src.sample_rate as u64 / 1000,
+            };
         }
         Ok(src)
     }

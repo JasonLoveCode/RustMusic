@@ -324,7 +324,7 @@ pub fn upsert_track(conn: &Connection, t: &NewTrack) {
            ON CONFLICT(path) DO UPDATE SET
              title=?2, artist=?3, album=?4, album_artist=?5, track_no=?6, disc=?7, year=?8,
              duration=?9, format=?10, bitrate=?11, sample_rate=?12, bit_depth=?13,
-             cover=?14, lrc_path=?15, size=?16, mtime=?17"#,
+             cover=?14, lrc_path=?15, size=?16, mtime=?17, missing=0"#,
         params![
             t.path, t.title, t.artist, t.album, t.album_artist, t.track_no, t.disc, t.year,
             t.duration, t.format, t.bitrate, t.sample_rate, t.bit_depth, t.cover, t.lrc_path,
@@ -647,6 +647,11 @@ pub fn add_to_playlist(conn: &Connection, pid: i64, tid: i64) -> Result<(), Stri
 }
 
 pub fn remove_from_playlist(conn: &Connection, pid: i64, tid: i64) {
+    // 在线条目的 track_id 是 0 占位：传 0 会匹配并删光歌单里所有在线
+    // 条目。行级删除应走 remove_playlist_entry（按 rowid），这里守住 0 值
+    if tid <= 0 {
+        return;
+    }
     let _ = conn.execute(
         "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
         params![pid, tid],
@@ -988,7 +993,8 @@ pub fn get_online_cover(conn: &Connection, kind: &str, rid: &str) -> Option<Stri
 /// list: "library" | "liked"；row_key: 本地 "track:<id>" / 在线 "netease:<rid>" / "qq:<rid>"
 ///（与 unavailable 键的格式一致）。未包含的 key（新入库/新收藏）自动排到已排序项之后。
 pub fn save_manual_order(conn: &Connection, list: &str, keys: &[String]) {
-    let _ = conn.execute("DELETE FROM manual_order WHERE list = ?1", params![list]);
+    // DELETE 必须与写入同事务：进程在 DELETE 后中断会让用户的整份手动
+    // 排序被清空且不可恢复
     let tx = match conn.unchecked_transaction() {
         Ok(t) => t,
         Err(e) => {
@@ -996,6 +1002,10 @@ pub fn save_manual_order(conn: &Connection, list: &str, keys: &[String]) {
             return;
         }
     };
+    if let Err(e) = tx.execute("DELETE FROM manual_order WHERE list = ?1", params![list]) {
+        eprintln!("[db] 清空旧手动排序失败: {e}");
+        return;
+    }
     for (i, k) in keys.iter().enumerate() {
         let _ = tx.execute(
             "INSERT OR REPLACE INTO manual_order(list, row_key, pos) VALUES(?1, ?2, ?3)",

@@ -139,10 +139,13 @@ export default function SettingsView() {
   };
 
   useEffect(() => {
-    api.saveDirGet().then((d) => {
-      setSaveDir(d.dir);
-      setSaveDirDefault(d.default);
-    });
+    api
+      .saveDirGet()
+      .then((d) => {
+        setSaveDir(d.dir);
+        setSaveDirDefault(d.default);
+      })
+      .catch(() => {}); // 失败静默为空，不能变成未处理 rejection
     refreshDevices();
     api.getAppInfo().then((i) => setAppVersion(i.version)).catch(() => {});
     useStore.getState().refreshCacheBytes();

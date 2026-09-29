@@ -70,6 +70,8 @@ export default function LibraryView({ mode }: { mode: Mode }) {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [pickerOpen, setPickerOpen] = useState(false);
   const [newPlName, setNewPlName] = useState("");
+  // “创建并添加”进行中：双击会创建两个同名歌单（后端不按名去重）
+  const [creatingPl, setCreatingPl] = useState(false);
   // 默认排序“添加时间”（资料库=入库顺序；最近播放/我喜欢=列表时间，本地与在线归并）
   const [sortKey, setSortKey] = useState<SortKey>("added");
   const [dir, setDir] = useState<1 | -1>(-1);
@@ -337,21 +339,24 @@ export default function LibraryView({ mode }: { mode: Mode }) {
     }
     setSel(new Set());
     setBatchMode(false);
+    // downloadOnline 永不 reject（错误已 toast），返回成功与否——
+    // 行级 try/catch 在这里是死代码，改为统计失败数汇总提示
+    let failed = 0;
     for (const r of list) {
-      try {
-        await downloadOnline({
-          kind: r.e.kind,
-          id: r.e.onlineId ?? "",
-          name: r.e.title,
-          artist: r.e.artist,
-          album: r.e.album,
-          cover: r.e.cover,
-          durationMs: Math.round(r.e.duration * 1000),
-          mediaMid: r.e.mediaMid ?? "",
-        });
-      } catch (e) {
-        toast(`下载「${r.e.title}」失败：${String(e)}`, "error");
-      }
+      const okFlag = await downloadOnline({
+        kind: r.e.kind,
+        id: r.e.onlineId ?? "",
+        name: r.e.title,
+        artist: r.e.artist,
+        album: r.e.album,
+        cover: r.e.cover,
+        durationMs: Math.round(r.e.duration * 1000),
+        mediaMid: r.e.mediaMid ?? "",
+      });
+      if (!okFlag) failed++;
+    }
+    if (failed > 0) {
+      toast(`批量下载完成，${failed}/${list.length} 首失败`, "error");
     }
   };
 
@@ -677,10 +682,16 @@ export default function LibraryView({ mode }: { mode: Mode }) {
           />
           <button
             className="btn-secondary"
+            disabled={creatingPl}
             onClick={async () => {
-              if (!newPlName.trim() || !selectedBatch.length) return;
-              const pid = await createPlaylist(newPlName.trim());
-              if (pid >= 0) await batchAddToPlaylist(pid);
+              if (creatingPl || !newPlName.trim() || !selectedBatch.length) return;
+              setCreatingPl(true);
+              try {
+                const pid = await createPlaylist(newPlName.trim());
+                if (pid >= 0) await batchAddToPlaylist(pid);
+              } finally {
+                setCreatingPl(false);
+              }
               setNewPlName("");
             }}
           >
