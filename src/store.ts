@@ -119,6 +119,11 @@ interface Store {
 
   /** B 站曲目元数据缓存（键 = rid "BVxxx-cid"，我喜欢/播放列表/队列条目用） */
   biliCache: Record<string, BiliTrack>;
+  /** Navidrome 元数据缓存（键 = 歌曲 id，最近播放/队列恢复用） */
+  ndCache: Record<
+    string,
+    { title: string; artist: string; album: string; cover: string; durationMs: number }
+  >;
 
   /** B 站登录态（扫码；字幕功能依赖登录） */
   biliLoggedIn: boolean;
@@ -566,6 +571,9 @@ function titleOfQueueItem(
   if (item.kind === "kugou") {
     return caches.kugouCache[item.id as string]?.name ?? `酷狗 #${item.id}`;
   }
+  if (item.kind === "navidrome") {
+    return useStore.getState().ndCache[item.id as string]?.title ?? `Navidrome #${item.id}`;
+  }
   if (item.kind === "bilibili") {
     return caches.biliCache[item.id as string]?.title ?? `B站 #${item.id}`;
   }
@@ -673,6 +681,7 @@ export const useStore = create<Store>((set, get) => ({
   kugouNickname: "",
 
   biliCache: {},
+  ndCache: {},
   biliLoggedIn: false,
   biliNickname: "",
   biliFollows: loadBiliFollows(),
@@ -1105,6 +1114,7 @@ export const useStore = create<Store>((set, get) => ({
     const qqCache = { ...get().qqCache };
     const kugouCache = { ...get().kugouCache };
     const biliCache = { ...get().biliCache };
+    const ndCache = { ...get().ndCache };
     for (const e of entries) {
       if (e.kind === "local" && e.trackId != null) {
         queue.push({ kind: "track", id: e.trackId });
@@ -1156,6 +1166,15 @@ export const useStore = create<Store>((set, get) => ({
           durationMs: Math.round(e.duration * 1000),
         };
         queue.push({ kind: "bilibili", id: e.onlineId });
+      } else if (e.kind === "navidrome" && e.onlineId) {
+        ndCache[e.onlineId] = {
+          title: e.title,
+          artist: e.artist,
+          album: e.album,
+          cover: e.cover,
+          durationMs: Math.round(e.duration * 1000),
+        };
+        queue.push({ kind: "navidrome", id: e.onlineId });
       }
     }
     let target = Math.max(0, Math.min(idx, queue.length - 1));
@@ -1168,6 +1187,7 @@ export const useStore = create<Store>((set, get) => ({
       neteaseCache,
       qqCache,
       kugouCache,
+      ndCache,
       biliCache,
       queue,
       qIndex: target,
@@ -1359,6 +1379,25 @@ export const useStore = create<Store>((set, get) => ({
           hqHash: t.hqHash ?? "",
           sqHash: t.sqHash ?? "",
           superHash: t.superHash ?? "",
+        })
+        .then(ok)
+        .catch((e) => fail(String(e)));
+    } else if (item.kind === "navidrome") {
+      const t = get().ndCache[item.id as string];
+      if (!t) {
+        fail("曲目信息缺失，请重试");
+        return;
+      }
+      const server = localStorage.getItem("navidrome.ui.server") ?? "";
+      const username = localStorage.getItem("navidrome.ui.username") ?? "";
+      api
+        .navidromePlay(server, username, {
+          id: item.id as string,
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          cover: t.cover,
+          durationMs: t.durationMs,
         })
         .then(ok)
         .catch((e) => fail(String(e)));

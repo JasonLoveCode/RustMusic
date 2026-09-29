@@ -33,7 +33,7 @@ export interface Folder {
 
 export interface PlaylistEntryMeta {
   rowid: number;
-  kind: "local" | "netease" | "qq" | "kugou" | "bilibili";
+  kind: "local" | "netease" | "qq" | "kugou" | "bilibili" | "navidrome";
   trackId: number | null;
   onlineId: string | null;
   title: string;
@@ -93,7 +93,7 @@ export interface LyricsPayload {
 
 export interface TrackInfo {
   id: number | null;
-  kind: "track" | "url" | "netease" | "qq" | "kugou" | "bilibili";
+  kind: "track" | "url" | "netease" | "qq" | "kugou" | "bilibili" | "navidrome";
   path: string;
   title: string;
   artist: string;
@@ -150,6 +150,27 @@ export interface KgPublicPlaylist {
   playCount: number;
   creator: string;
   songs: KgSong[];
+}
+
+/** Navidrome（Subsonic）歌曲条目 */
+export interface NdSong {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  /** 秒 */
+  duration: number;
+  coverUrl: string;
+}
+
+/** Navidrome 专辑条目 */
+export interface NdAlbum {
+  id: string;
+  name: string;
+  artist: string;
+  coverUrl: string;
+  songCount: number;
+  duration: number;
 }
 
 /** B 站视频音频条目（rid = "BVxxx-cid"，与后端 qid/缓存键一致） */
@@ -276,12 +297,13 @@ export interface CurrentTrack extends TrackInfo {
 
 export type RepeatMode = "off" | "all" | "one";
 
-export type QueueItemKind = "track" | "url" | "netease" | "qq" | "kugou" | "bilibili";
+export type QueueItemKind = "track" | "url" | "netease" | "qq" | "kugou" | "bilibili" | "navidrome";
 
 export type QueueItem =
   | { kind: "track" | "netease" | "url"; id: number }
   | { kind: "qq" | "kugou"; id: string }
-  | { kind: "bilibili"; id: string };
+  | { kind: "bilibili"; id: string }
+  | { kind: "navidrome"; id: string };
 
 export type ViewName =
   | "library"

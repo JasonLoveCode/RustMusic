@@ -38,6 +38,7 @@ wasapi = "0.14"
 windows51 = { package = "windows", version = "0.51", default-features = false }
 qrcode = { version = "0.14", default-features = false, features = ["image"] }
 filetime = "0.2"
+keyring = { version = "3", features = ["windows-native"] }
 
 [target.'cfg(windows)'.dependencies]
 # WebView2 TrySuspend：托盘隐藏时挂起渲染进程回收内存

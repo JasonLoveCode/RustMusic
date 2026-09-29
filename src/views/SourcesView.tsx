@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { useStore } from "../store";
+import NavidromePanel from "./NavidromePanel";
 import Modal from "../components/Modal";
 import CoverImg from "../components/CoverImg";
 import { fmtDate, fmtTime } from "../utils";
@@ -983,18 +984,7 @@ export default function SourcesView() {
 
       <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-2">
         {tab === "navidrome" ? (
-          <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--ink-3)]">
-            <div
-              className="w-16 h-16 rounded-2xl flex items-center justify-center"
-              style={{
-                background: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.06)",
-              }}
-            >
-              <Server size={26} className="text-[var(--ink-3)]" />
-            </div>
-            <div className="text-[13.5px]">Navidrome 支持即将上线，敬请期待</div>
-          </div>
+          <NavidromePanel />
         ) : !result || !tabResult ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-[var(--ink-3)]">
             <div

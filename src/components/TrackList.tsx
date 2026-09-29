@@ -500,7 +500,9 @@ export default function TrackList({
                     ? "酷狗"
                     : e.kind === "bilibili"
                       ? "B站"
-                      : "QQ音乐"}
+                      : e.kind === "navidrome"
+                        ? "Navidrome"
+                        : "QQ音乐"}
               </span>
               {e.vip && !dead && (
                 <span className="text-[9.5px] px-1.5 py-0.5 rounded bg-[var(--accent-weak)] text-[var(--accent-strong)] font-bold shrink-0">

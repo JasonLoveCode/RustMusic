@@ -270,6 +270,31 @@ export const api = {
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   extractCoverPalette: (url: string) => invoke<string[]>("extract_cover_palette", { url }),
   assetScopeAllow: (path: string) => invoke<void>("asset_scope_allow", { path }),
+  navidromeSave: (server: string, username: string, password: string) =>
+    invoke<void>("navidrome_save", { req: { server, username, password } }),
+  navidromeAlbums: (server: string, username: string) =>
+    invoke<import("./types").NdAlbum[]>("navidrome_albums", { server, username }),
+  navidromeSearch: (server: string, username: string, query: string) =>
+    invoke<import("./types").NdSong[]>("navidrome_search", { server, username, query }),
+  navidromeAlbumSongs: (server: string, username: string, id: string) =>
+    invoke<{ name: string; artist: string; songs: import("./types").NdSong[] }>(
+      "navidrome_album_songs",
+      { server, username, id }
+    ),
+  navidromePlay: (
+    server: string,
+    username: string,
+    track: {
+      id: string;
+      title: string;
+      artist: string;
+      album: string;
+      cover: string;
+      durationMs: number;
+    }
+  ) => invoke<void>("navidrome_play", { server, username, track }),
+  navidromeForget: (server: string, username: string) =>
+    invoke<void>("navidrome_forget", { server, username }),
   playTrack: (id: number) => invoke<void>("play_track", { id }),
   playSource: (id: number) => invoke<void>("play_source", { id }),
   playPause: () => invoke<void>("play_pause"),

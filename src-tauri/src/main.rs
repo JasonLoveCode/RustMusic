@@ -6,6 +6,7 @@ mod db;
 mod engine;
 mod eq;
 mod kugou;
+mod navidrome;
 mod library;
 mod lyrics;
 mod models;
@@ -542,6 +543,13 @@ fn main() {
             commands::rename_playlist,
             commands::reorder_playlists,
             commands::asset_scope_allow,
+            commands::navidrome_save,
+            commands::navidrome_connect,
+            commands::navidrome_forget,
+            commands::navidrome_search,
+            commands::navidrome_albums,
+            commands::navidrome_album_songs,
+            commands::navidrome_play,
             commands::kugou_search,
             commands::kugou_play,
             commands::kugou_lyric,
