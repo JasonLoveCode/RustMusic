@@ -98,6 +98,14 @@ fn suspend_main_webview(app: &AppHandle) {
             let _ = controller.SetIsVisible(false);
             let handler = webview2_com::TrySuspendCompletedHandler::create(Box::new(|hr, ok| {
                 eprintln!("[webview] TrySuspend 完成 hr={hr:?} ok={ok:?}");
+                if ok {
+                    // 冻结后 Windows 仍惰性裁剪工作集（实测半分钟才落到底），
+                    // 主动换出物理页让内存即刻回落；进程已冻结，操作安全
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(800));
+                        trim_webview_working_sets();
+                    });
+                }
                 Ok(())
             }));
             if let Err(e) = cwv3.TrySuspend(&handler) {
@@ -107,6 +115,77 @@ fn suspend_main_webview(app: &AppHandle) {
     }) {
         eprintln!("[webview] with_webview 失败: {e}");
     }
+}
+
+/// 把本应用派生的全部 WebView2 子进程（浏览器/GPU/渲染/实用工具）的工作集
+/// 换出到待命列表。TrySuspend 冻结进程后 Windows 要几十秒才惰性裁剪完物理页，
+/// EmptyWorkingSet 立即完成这一步；恢复时页面从待命列表软错误换回，代价可忽略
+fn trim_webview_working_sets() {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows::Win32::System::ProcessStatus::EmptyWorkingSet;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+    };
+
+    let snapshot = match unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) } {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let mut entry = PROCESSENTRY32W::default();
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    let mut webview_procs: Vec<(u32, u32)> = Vec::new(); // (pid, ppid)
+    unsafe {
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                let name = String::from_utf16_lossy(&entry.szExeFile);
+                let name = name.trim_end_matches('\0');
+                if name.eq_ignore_ascii_case("msedgewebview2.exe") {
+                    webview_procs.push((entry.th32ProcessID, entry.th32ParentProcessID));
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot);
+    }
+
+    // 归属判定：浏览器进程父 PID = 本应用，渲染/GPU/工具进程父 PID = 浏览器进程
+    let my_pid = std::process::id();
+    let mut targets: Vec<u32> = webview_procs
+        .iter()
+        .filter(|(_, ppid)| *ppid == my_pid)
+        .map(|(pid, _)| *pid)
+        .collect();
+    loop {
+        let before = targets.len();
+        for (pid, ppid) in &webview_procs {
+            if !targets.contains(pid) && targets.contains(ppid) {
+                targets.push(*pid);
+            }
+        }
+        if targets.len() == before {
+            break;
+        }
+    }
+
+    let rights = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA;
+    let mut trimmed = 0;
+    for pid in targets {
+        if let Ok(h) = unsafe { OpenProcess(rights, false, pid) } {
+            unsafe {
+                if EmptyWorkingSet(h).is_ok() {
+                    trimmed += 1;
+                }
+                let _ = CloseHandle(h);
+            }
+        }
+    }
+    eprintln!("[webview] 工作集裁剪完成，进程数 {trimmed}");
 }
 
 /// 恢复主窗口 WebView。notify=true 时补发播放状态/进度并通知前端
@@ -448,6 +527,9 @@ fn main() {
             std::fs::create_dir_all(app_data.join("covers")).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(app_data.join("downloads")).map_err(|e| e.to_string())?;
 
+            // 旧库存量封面补 160px 列表缩略图（后台线程，不阻塞启动）
+            library::migrate_cover_thumbs(&app_data);
+
             let conn = db::init(&app_data.join("library.db"))?;
 
             // 读取用户设置
@@ -543,6 +625,7 @@ fn main() {
             commands::rename_playlist,
             commands::reorder_playlists,
             commands::asset_scope_allow,
+            commands::prepare_skin_image,
             commands::navidrome_save,
             commands::navidrome_connect,
             commands::navidrome_forget,

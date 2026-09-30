@@ -8,16 +8,28 @@ interface CoverImgProps {
   seed: string;
   className?: string;
   iconSize?: number;
+  /**
+   * 列表小图档：本地 .jpg 封面优先加载 160px 缩略图（<hash>_s.jpg），
+   * 缺失（旧库未迁移）时回退原图。64px 行高用不到 600px 解码位图，
+   * 小图把列表滚动的解码缓存从 ~1.4MB/张 压到 ~100KB/张
+   */
+  small?: boolean;
 }
 
-export default function CoverImg({ src, seed, className = "", iconSize = 18 }: CoverImgProps) {
+export default function CoverImg({ src, seed, className = "", iconSize = 18, small = false }: CoverImgProps) {
   const [err, setErr] = useState(false);
-  useEffect(() => setErr(false), [src]);
+  const [smallMissing, setSmallMissing] = useState(false);
+  useEffect(() => {
+    setErr(false);
+    setSmallMissing(false);
+  }, [src]);
 
+  const isLocal = !!src && !src.startsWith("http://") && !src.startsWith("https://");
+  const useSmall = small && isLocal && !smallMissing && /\.(jpg|jpeg)$/i.test(src);
   const url = src
-    ? src.startsWith("http://") || src.startsWith("https://")
-      ? src
-      : coverSrc(src)
+    ? isLocal
+      ? coverSrc(useSmall ? src.replace(/\.(jpg|jpeg)$/i, "_s.jpg") : src)
+      : src
     : "";
   if (url && !err) {
     return (
@@ -32,7 +44,11 @@ export default function CoverImg({ src, seed, className = "", iconSize = 18 }: C
         // 不带 Referer：应用来源（tauri.localhost）会被 B 站等图床的
         // 防盗链拒绝（403），无 Referer 反而放行
         referrerPolicy="no-referrer"
-        onError={() => setErr(true)}
+        onError={() => {
+          // 小图不存在（老库迁移完成前）：回退原图重试一次
+          if (useSmall) setSmallMissing(true);
+          else setErr(true);
+        }}
         className={`object-cover bg-[var(--shade)] ${className}`}
       />
     );

@@ -437,6 +437,42 @@ const loadMoreBusy: Record<"netease" | "qq" | "kugou", boolean> = {
 };
 /** set_eq IPC 防抖定时器 */
 let eqTimer: ReturnType<typeof setTimeout> | null = null;
+
+// ---------- 在线曲目缓存容量上限（防御性封顶） ----------
+// 播放队列条目只存 {kind, id}，播放时元数据从这些缓存解析（playQueueIndex），
+// 因此这里不能做激进的 LRU——上限取得极宽裕（重度搜索/导入整个会话也难触达），
+// 只防长时间使用下无上限增长。淘汰按写入顺序（FIFO）。
+
+const ONLINE_CACHE_CAP = 2000;
+type OnlineCacheKind = "netease" | "qq" | "kugou" | "bili" | "nd";
+const onlineCacheOrder: Record<OnlineCacheKind, (string | number)[]> = {
+  netease: [],
+  qq: [],
+  kugou: [],
+  bili: [],
+  nd: [],
+};
+
+/**
+ * 提交在线缓存前调用：登记新写入的键（相对 prev），超上限按写入序淘汰最旧条目。
+ * next 必须是调用方新建的副本（本项目的写入模式均是拷贝后修改），可安全原地删
+ */
+function capOnlineCache<K extends string | number, V>(
+  kind: OnlineCacheKind,
+  next: Record<K, V>,
+  prev: Record<K, V>
+): Record<K, V> {
+  const order = onlineCacheOrder[kind] as K[];
+  for (const k in next) {
+    if (!(k in prev)) order.push(k);
+  }
+  while (order.length > ONLINE_CACHE_CAP) {
+    const oldest = order.shift();
+    if (oldest !== undefined && oldest in next) delete next[oldest];
+  }
+  return next;
+}
+
 /** 下载串行队列：download://progress 是单通道事件、download 是单槽状态，
  *  并发下载会互抢进度条，且同名文件并发写会损坏——排成队依次执行 */
 let downloadChain: Promise<void> = Promise.resolve();
@@ -1110,7 +1146,7 @@ export const useStore = create<Store>((set, get) => ({
     const queue: QueueItem[] = list.map((t) => ({ kind: "netease", id: t.id }));
     const target = Math.max(0, Math.min(idx, queue.length - 1));
     set((s) => ({
-      neteaseCache: cache,
+      neteaseCache: capOnlineCache("netease", cache, get().neteaseCache),
       queue,
       qIndex: target,
       history: [...s.history.slice(-50), s.qIndex],
@@ -1211,11 +1247,11 @@ export const useStore = create<Store>((set, get) => ({
     );
     if (avail >= 0) target = avail;
     set((s) => ({
-      neteaseCache,
-      qqCache,
-      kugouCache,
-      ndCache,
-      biliCache,
+      neteaseCache: capOnlineCache("netease", neteaseCache, get().neteaseCache),
+      qqCache: capOnlineCache("qq", qqCache, get().qqCache),
+      kugouCache: capOnlineCache("kugou", kugouCache, get().kugouCache),
+      ndCache: capOnlineCache("nd", ndCache, get().ndCache),
+      biliCache: capOnlineCache("bili", biliCache, get().biliCache),
       queue,
       qIndex: target,
       history: [...s.history.slice(-50), s.qIndex],
@@ -1241,7 +1277,7 @@ export const useStore = create<Store>((set, get) => ({
         dt: Math.round(e.duration * 1000),
         fee: e.vip ? 1 : 0,
       };
-      set({ neteaseCache });
+      set({ neteaseCache: capOnlineCache("netease", neteaseCache, get().neteaseCache) });
       return { kind: "netease", id: idNum };
     }
     if (e.kind === "qq" && e.onlineId) {
@@ -1257,7 +1293,7 @@ export const useStore = create<Store>((set, get) => ({
         durationMs: Math.round(e.duration * 1000),
         vip: e.vip ?? false,
       };
-      set({ qqCache });
+      set({ qqCache: capOnlineCache("qq", qqCache, get().qqCache) });
       return { kind: "qq", id: e.onlineId };
     }
     if (e.kind === "kugou" && e.onlineId) {
@@ -1272,7 +1308,7 @@ export const useStore = create<Store>((set, get) => ({
         vip: e.vip ?? false,
         albumAudioId: Number(e.mediaMid) || 0,
       };
-      set({ kugouCache });
+      set({ kugouCache: capOnlineCache("kugou", kugouCache, get().kugouCache) });
       return { kind: "kugou", id: e.onlineId };
     }
     if (e.kind === "bilibili" && e.onlineId) {
@@ -1285,7 +1321,7 @@ export const useStore = create<Store>((set, get) => ({
         cover: e.cover,
         durationMs: Math.round(e.duration * 1000),
       };
-      set({ biliCache });
+      set({ biliCache: capOnlineCache("bili", biliCache, get().biliCache) });
       return { kind: "bilibili", id: e.onlineId };
     }
     if (e.kind === "navidrome" && e.onlineId) {
@@ -1297,7 +1333,7 @@ export const useStore = create<Store>((set, get) => ({
         cover: e.cover,
         durationMs: Math.round(e.duration * 1000),
       };
-      set({ ndCache });
+      set({ ndCache: capOnlineCache("nd", ndCache, get().ndCache) });
       return { kind: "navidrome", id: e.onlineId };
     }
     return null;
@@ -1896,7 +1932,7 @@ export const useStore = create<Store>((set, get) => ({
     const queue: QueueItem[] = rows.map((r) => ({ kind: "bilibili", id: r.rid }));
     const target = Math.max(0, Math.min(idx, queue.length - 1));
     set((s) => ({
-      biliCache: cache,
+      biliCache: capOnlineCache("bili", cache, get().biliCache),
       playingSourceId: null,
       queue,
       qIndex: target,
@@ -2014,7 +2050,7 @@ export const useStore = create<Store>((set, get) => ({
     const queue: QueueItem[] = list.map((t) => ({ kind: "qq", id: t.id }));
     const target = Math.max(0, Math.min(idx, queue.length - 1));
     set((s) => ({
-      qqCache: cache,
+      qqCache: capOnlineCache("qq", cache, get().qqCache),
       queue,
       qIndex: target,
       history: [...s.history.slice(-50), s.qIndex],
@@ -2031,7 +2067,7 @@ export const useStore = create<Store>((set, get) => ({
     const queue: QueueItem[] = list.map((t) => ({ kind: "kugou", id: t.id }));
     const target = Math.max(0, Math.min(idx, queue.length - 1));
     set((s) => ({
-      kugouCache: cache,
+      kugouCache: capOnlineCache("kugou", cache, get().kugouCache),
       queue,
       qIndex: target,
       history: [...s.history.slice(-50), s.qIndex],
@@ -2063,7 +2099,7 @@ export const useStore = create<Store>((set, get) => ({
         qqResults: append ? [...s.qqResults, ...r.songs] : r.songs,
         qqSearching: false,
         qqPage: page,
-        qqCache: cache,
+        qqCache: capOnlineCache("qq", cache, get().qqCache),
       }));
     } catch (e) {
       if (gen === searchGen.qq) {
@@ -2096,7 +2132,7 @@ export const useStore = create<Store>((set, get) => ({
         kugouResults: append ? [...s.kugouResults, ...r.songs] : r.songs,
         kugouSearching: false,
         kugouPage: page,
-        kugouCache: cache,
+        kugouCache: capOnlineCache("kugou", cache, get().kugouCache),
       }));
     } catch (e) {
       if (gen === searchGen.kugou) {
@@ -2471,7 +2507,7 @@ export const useStore = create<Store>((set, get) => ({
         neteaseResults: append ? [...s.neteaseResults, ...r.songs] : r.songs,
         neteaseTotal: r.total,
         neteaseSearching: false,
-        neteaseCache: cache,
+        neteaseCache: capOnlineCache("netease", cache, get().neteaseCache),
       }));
     } catch (e) {
       if (gen === searchGen.netease) {
