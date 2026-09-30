@@ -297,6 +297,7 @@ export default function TrackList({
           <CoverImg
             src={t.cover}
             seed={t.title}
+            small
             className="hover-lift w-11 h-11 rounded-xl shadow-[var(--cover-shadow-sm)] shrink-0"
             iconSize={16}
           />
@@ -484,6 +485,7 @@ export default function TrackList({
           <CoverImg
             src={e.cover}
             seed={e.title}
+            small
             className="hover-lift w-11 h-11 rounded-xl shadow-[var(--cover-shadow-sm)] shrink-0"
             iconSize={16}
           />

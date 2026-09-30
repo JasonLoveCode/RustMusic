@@ -132,12 +132,14 @@ function DesktopLyrics() {
     };
   }, []);
 
-  // rAF 插值循环：仅播放中推进（暂停时静止，修复暂停仍更新的 bug）
+  // rAF 插值循环：仅播放中运行（暂停时彻底停掉循环，渲染进程得以空闲，
+  // Chromium 才有机会回收图片/渲染缓存；恢复播放由 data.playing 依赖触发重建）
   useEffect(() => {
+    if (!data.playing) return;
     let raf = 0;
     let last = 0;
     const loop = (t: number) => {
-      if (data.playing && t - last > 50) {
+      if (t - last > 50) {
         last = t;
         setRenderTick((n) => n + 1);
       }

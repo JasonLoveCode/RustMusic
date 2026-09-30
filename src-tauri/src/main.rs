@@ -448,6 +448,9 @@ fn main() {
             std::fs::create_dir_all(app_data.join("covers")).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(app_data.join("downloads")).map_err(|e| e.to_string())?;
 
+            // 旧库存量封面补 160px 列表缩略图（后台线程，不阻塞启动）
+            library::migrate_cover_thumbs(&app_data);
+
             let conn = db::init(&app_data.join("library.db"))?;
 
             // 读取用户设置
@@ -543,6 +546,7 @@ fn main() {
             commands::rename_playlist,
             commands::reorder_playlists,
             commands::asset_scope_allow,
+            commands::prepare_skin_image,
             commands::navidrome_save,
             commands::navidrome_connect,
             commands::navidrome_forget,

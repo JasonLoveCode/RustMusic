@@ -132,7 +132,7 @@ export default function QueuePanel() {
               onClick={() => jumpTo(i)}
             >
               <div className="relative w-9 h-9 rounded-lg overflow-hidden shrink-0">
-                <CoverImg src={cover} seed={title} className="w-9 h-9" iconSize={13} />
+                <CoverImg src={cover} seed={title} small className="w-9 h-9" iconSize={13} />
                 {/* 播放意图反馈：hover 显示播放/暂停，当前行播放中叠均衡器动画 */}
                 {active && playing ? (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/35">

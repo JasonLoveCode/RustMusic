@@ -370,6 +370,7 @@ export default function PlayerBar({ centered = false }: { centered?: boolean }) 
                 <CoverImg
                   src={current.cover}
                   seed={current.title}
+                  small
                   className="w-[44px] h-[44px] rounded-[10px] shadow-[var(--cover-shadow-sm)]"
                   iconSize={20}
                 />

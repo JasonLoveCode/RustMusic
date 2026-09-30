@@ -398,6 +398,7 @@ export default function PlaylistDetail({ id }: { id: number }) {
                       <CoverImg
                         src={r.cover}
                         seed={r.name}
+                        small
                         className="hover-lift w-11 h-11 rounded-xl shadow-[var(--cover-shadow-sm)] shrink-0"
                         iconSize={16}
                       />

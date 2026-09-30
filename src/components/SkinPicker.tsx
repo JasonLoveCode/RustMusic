@@ -53,15 +53,24 @@ export default function SkinPicker({
       });
       const paths = typeof sel === "string" ? [sel] : (sel ?? []);
       if (!paths.length) return;
-      const list = [...customImgs, ...paths.filter((p) => !customImgs.includes(p))];
+      // 大图先换屏幕级压缩副本（失败/动图/小图原样返回），
+      // 避免原始分辨率壁纸整图解码后常驻渲染进程图片缓存
+      const prepared = await Promise.all(
+        paths.map((p) =>
+          api
+            .prepareSkinImage(p)
+            .catch(() => p)
+        )
+      );
+      const list = [...customImgs, ...prepared.filter((p) => !customImgs.includes(p))];
       setCustomImgs(list);
       saveCustomImages(list);
-      // asset 协议作用域默认不含用户任意目录：选图后逐个放行
+      // asset 协议作用域默认不含用户任意目录：选图后逐个放行（原图需放行，压缩副本在应用数据目录内已默认可见）
       for (const p of paths) {
         await api.assetScopeAllow(p).catch(() => {});
       }
-      setActiveCustomImage(paths[paths.length - 1]);
-      setActiveImg(paths[paths.length - 1]);
+      setActiveCustomImage(prepared[prepared.length - 1]);
+      setActiveImg(prepared[prepared.length - 1]);
       setSkin(CUSTOM_SKIN);
       useStore.getState().toast(`已添加 ${paths.length} 张皮肤图片`, "success");
     } catch (e) {

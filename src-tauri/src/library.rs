@@ -101,15 +101,27 @@ pub fn run_scan(app: AppHandle) {
         }
     }
 
-    // 并行解析 + 分批入库
+    // 并行解析 + 分批入库。
+    // 用小线程池而非全局池：parse_track 会把内嵌封面整图解码（一张大图可占
+    // 数十 MB），并发度 = 核数时扫描期内存峰值可达数百 MB；4 线程把峰值压到
+    // 可控范围，扫描本身以 IO/解码为主，收益远大于速度损失
+    static PARSE_POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    let pool = PARSE_POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism()
+            .map(|n| n.get().min(4))
+            .unwrap_or(4);
+        rayon::ThreadPoolBuilder::new().num_threads(n).build().expect("build parse pool")
+    });
     let mut done = total - to_parse.len();
     emit(done, total, true);
     for chunk in to_parse.chunks(24) {
         let app_data = st.app_data.clone();
-        let parsed: Vec<Option<NewTrack>> = chunk
-            .par_iter()
-            .map(|p| parse_track(p, &app_data))
-            .collect();
+        let parsed: Vec<Option<NewTrack>> = pool.install(|| {
+            chunk
+                .par_iter()
+                .map(|p| parse_track(p, &app_data))
+                .collect()
+        });
         {
             let conn = st.db.lock();
             for t in parsed.into_iter().flatten() {
@@ -272,6 +284,13 @@ fn save_cover(
             .save_with_format(&dest, image::ImageFormat::Jpeg)
             .is_ok()
         {
+            // 列表用小缩略图（160px 解码 ≈ 100KB，600px ≈ 1.4MB）：
+            // 长列表滚动时的解码缓存是渲染内存的大头，行高只有 64px 用不到 600px
+            let small = dir.join(format!("{name}_s.jpg"));
+            img.thumbnail(160, 160)
+                .to_rgb8()
+                .save_with_format(&small, image::ImageFormat::Jpeg)
+                .ok();
             return Some(dest.to_string_lossy().into_owned());
         }
     }
@@ -288,4 +307,36 @@ fn save_cover(
     let dest = dir.join(format!("{name}.{ext}"));
     fs::write(&dest, data).ok()?;
     Some(dest.to_string_lossy().into_owned())
+}
+
+/// 为存量 600px 封面补生成 160px 列表缩略图（升级旧库的一次性后台迁移）。
+/// 补齐前前端对缺失小图的封面自动回退到原图，功能不受影响
+pub fn migrate_cover_thumbs(app_data: &Path) {
+    let app_data = app_data.to_path_buf();
+    std::thread::spawn(move || {
+        let dir = app_data.join("covers");
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".jpg") || name.ends_with("_s.jpg") {
+                continue;
+            }
+            let stem = name.strip_suffix(".jpg").unwrap_or(name);
+            let small = dir.join(format!("{stem}_s.jpg"));
+            if small.exists() {
+                continue;
+            }
+            if let Ok(img) = image::open(&p) {
+                img.thumbnail(160, 160)
+                    .to_rgb8()
+                    .save_with_format(&small, image::ImageFormat::Jpeg)
+                    .ok();
+            }
+        }
+    });
 }

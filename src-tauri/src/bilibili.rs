@@ -105,6 +105,10 @@ fn cache_ttl_for(url: &str) -> Option<Duration> {
     }
 }
 
+/// 缓存容量上限：超限淘汰最旧条目。TTL 过期条目不会被读，但若不删除会永久驻留
+/// （每次播放/搜索都会产生新条目），长会话下无上限增长
+const CACHE_CAP: usize = 256;
+
 fn with_cache<T>(f: impl FnOnce(&mut HashMap<String, CacheEntry>) -> T) -> Option<T> {
     static CACHE: OnceLock<Mutex<HashMap<String, CacheEntry>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -114,13 +118,42 @@ fn with_cache<T>(f: impl FnOnce(&mut HashMap<String, CacheEntry>) -> T) -> Optio
 
 fn cache_get(url: &str) -> Option<Value> {
     let ttl = cache_ttl_for(url)?;
+    // 读到过期条目顺手删除：直链按 cid 各异，不清会越积越多
     with_cache(|map| {
-        map.get(url).filter(|e| e.at.elapsed() < ttl).map(|e| e.value.clone())
+        match map.get(url) {
+            Some(e) if e.at.elapsed() < ttl => Some(Some(e.value.clone())),
+            Some(_) => {
+                map.remove(url);
+                Some(None)
+            }
+            None => Some(None),
+        }
     })?
+    .flatten()
 }
 
 fn cache_put(url: &str, v: Value) {
-    with_cache(|map| map.insert(url.to_string(), CacheEntry { value: v, at: Instant::now() }));
+    // 只有带 TTL 的响应会被 cache_get 读回；其余（搜索/字幕/用户数据等）
+    // 存了也不会被读，纯属驻留浪费——这些请求体量大且永不淘汰
+    if cache_ttl_for(url).is_none() {
+        return;
+    }
+    with_cache(|map| {
+        // 先清过期，再按插入时间淘汰最旧，保证 map 有界
+        map.retain(|_, e| e.at.elapsed() < Duration::from_secs(30 * 60));
+        while map.len() >= CACHE_CAP {
+            if let Some(oldest) = map
+                .iter()
+                .min_by_key(|(_, e)| e.at)
+                .map(|(k, _)| k.clone())
+            {
+                map.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+        map.insert(url.to_string(), CacheEntry { value: v, at: Instant::now() });
+    });
 }
 
 /// 请求 B 站 API 并解析为 JSON。

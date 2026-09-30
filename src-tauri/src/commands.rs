@@ -457,6 +457,79 @@ pub async fn asset_scope_allow(app: AppHandle, path: String) -> Result<(), Strin
         .map_err(|e| e.to_string())
 }
 
+/// 自定义皮肤图的展示用压缩副本：整图解码后按屏幕级尺寸（≤1920px）重存，
+/// 避免原始分辨率（4K/8K 壁纸解码可达数十至上百 MB）常驻渲染进程图片缓存。
+/// 动图（gif）与已 ≤1920px 的图原样返回；任何失败都回退原路径，不影响选图
+#[tauri::command]
+pub async fn prepare_skin_image(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<String, String> {
+    let lower = path.to_lowercase();
+    if lower.ends_with(".gif") {
+        return Ok(path);
+    }
+    let src = std::path::Path::new(&path);
+    let (mtime, size) = {
+        let md = std::fs::metadata(src).map_err(|e| e.to_string())?;
+        (
+            md.modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            md.len(),
+        )
+    };
+    // 目标名绑定来源路径 + 内容版本：换图/改图后不会读到旧压缩副本
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    path.hash(&mut h);
+    mtime.hash(&mut h);
+    size.hash(&mut h);
+    let stem = format!("{:016x}", h.finish());
+
+    let dir = state.app_data.join("skins");
+    let _ = std::fs::create_dir_all(&dir);
+
+    // 已有副本直接复用（重复选同一张图不重复解码）
+    let hit = dir.join(format!("{stem}.png"));
+    if hit.exists() {
+        return Ok(hit.to_string_lossy().into_owned());
+    }
+    let hit_jpg = dir.join(format!("{stem}.jpg"));
+    if hit_jpg.exists() {
+        return Ok(hit_jpg.to_string_lossy().into_owned());
+    }
+
+    // 先廉价读尺寸：≤1920 的图不做整图解码，直接原样返回
+    let (w, h) = image::ImageReader::open(src)
+        .ok()
+        .and_then(|r| r.with_guessed_format().ok())
+        .and_then(|r| r.into_dimensions().ok())
+        .ok_or_else(|| "读取图片信息失败".to_string())?;
+    if w <= 1920 && h <= 1920 {
+        return Ok(path);
+    }
+
+    let img = image::open(src).map_err(|e| e.to_string())?;
+    let small = img.thumbnail(1920, 1920);
+    // 带透明通道的图存 PNG 保持透明；照片存 JPEG 体积小
+    let dest = if small.color().has_alpha() {
+        hit
+    } else {
+        hit_jpg
+    };
+    small
+        .save_with_format(&dest, if dest.extension().and_then(|e| e.to_str()) == Some("png") {
+            image::ImageFormat::Png
+        } else {
+            image::ImageFormat::Jpeg
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().into_owned())
+}
+
 // ---------- Navidrome（Subsonic 兼容，密码存凭据管理器） ----------
 
 #[derive(serde::Deserialize)]

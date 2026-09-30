@@ -277,6 +277,8 @@ export const api = {
   openUrl: (url: string) => invoke<void>("open_url", { url }),
   extractCoverPalette: (url: string) => invoke<string[]>("extract_cover_palette", { url }),
   assetScopeAllow: (path: string) => invoke<void>("asset_scope_allow", { path }),
+  /** 皮肤图片的展示用压缩副本（≤1920px；动图/小图原样返回，失败回退原路径） */
+  prepareSkinImage: (path: string) => invoke<string>("prepare_skin_image", { path }),
   navidromeSave: (server: string, username: string, password: string) =>
     invoke<void>("navidrome_save", { req: { server, username, password } }),
   navidromeAlbums: (server: string, username: string) =>
